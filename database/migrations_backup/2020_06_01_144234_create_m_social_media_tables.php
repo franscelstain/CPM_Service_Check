@@ -1,0 +1,42 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+class CreateMSocialMediaTables extends Migration
+{
+    /**
+     * Run the migrations.
+     *
+     * @return void
+     */
+    public function up()
+    {
+        Schema::create('m_social_media', function (Blueprint $table) {            
+            $table->bigIncrements('socmed_id');
+            $table->string('socmed_name');
+            $table->string('socmed_slug');
+            $table->string('socmed_icon_landing')->nullable();
+            $table->string('socmed_icon_colored')->nullable();
+            $table->enum('socmed_view', ['No', 'Yes'])->default('No');
+            $table->integer('sequence_to');
+            $table->enum('is_active', ['No', 'Yes'])->default('Yes');
+            $table->string('created_by', 50);
+            $table->string('updated_by', 50)->nullable();
+            $table->string('created_host', 30);
+            $table->string('updated_host', 30)->nullable();
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     *
+     * @return void
+     */
+    public function down()
+    {
+        Schema::dropIfExists('m_social_media');
+    }
+}
