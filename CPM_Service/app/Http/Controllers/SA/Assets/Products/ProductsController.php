@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\SA\Assets\Products;
 
 use App\Http\Controllers\AppController;
+use App\Interfaces\Products\ProductRepositoryInterface;
 use App\Models\SA\Assets\AssetClass;
 use App\Models\SA\Assets\AssetDocument;
 use App\Models\SA\Assets\Products\DocumentView;
@@ -19,6 +20,12 @@ use DB;
 class ProductsController extends AppController
 {
     public $table = 'SA\Assets\Products\Product';
+    protected $productRepo;
+
+    public function __construct(ProductRepositoryInterface $productRepo)
+    {
+        $this->productRepo = $productRepo;
+    }
 
     public function index()
     {
@@ -99,6 +106,44 @@ class ProductsController extends AppController
         return $this->db_detail($id);
     }
 
+    public function history_performance($id)
+    {
+        $product    = Product::select('m_products.product_id', 'm_products.product_name', 'b.price', 'b.return_1day', 'b.return_3day', 'b.return_1month', 'b.return_3month', 'b.return_6month', 'b.return_1year','b.return_3year','b.return_5year', 'c.asset_class_name', 'c.asset_class_color', 'd.asset_category_name', 'e.issuer_name', 'e.issuer_logo', 'f.profile_name')
+                    ->join('m_products_period as b', 'm_products.product_id', '=', 'b.product_id')
+                    ->leftJoin('m_asset_class as c', function($qry) { $qry->on('m_products.asset_class_id', '=', 'c.asset_class_id')->where('b.is_active', 'Yes'); })
+                    ->leftJoin('m_asset_categories as d', function($qry) { $qry->on('c.asset_category_id', '=', 'd.asset_category_id')->where('d.is_active', 'Yes'); })
+                    ->leftJoin('m_issuer as e', function($qry) { $qry->on('m_products.issuer_id', '=', 'e.issuer_id')->where('e.is_active', 'Yes'); })
+                    ->leftJoin('m_risk_profiles as f', function($qry) { $qry->on('m_products.profile_id', '=', 'f.profile_id')->where('f.is_active', 'Yes'); })
+                    ->where([['m_products.product_id', $id], ['m_products.is_active', 'Yes'], ['b.is_active', 'Yes']])
+                    ->first();
+         return $this->app_response('History Product Performance', $product);    
+    }
+
+    public function mutual_fund_list(Request $request)
+    {
+        try {
+            $search = $request->input('search');
+            $limit = $request->input('limit', 10); // Default limit 10
+            $colName = $request->input('colName', 'issuer_name');
+            $colSort = $request->input('colSort', 'asc');
+            $page = $request->input('page');
+    
+            $product = $this->productRepo->mutualFundProductList($search, $limit, $page, $colName, $colSort);
+            $total = !empty($search) ? $this->productRepo->countProductByAssetCategory('Mutual Fund') : $product->total();
+    
+            return $this->app_response('Products - Mutual Fund', [
+                'item' => $product->items(),
+                'current_page' => $product->currentPage(),
+                'last_page' => $product->lastPage(),
+                'per_page' => $product->perPage(),
+                'total' => $total,
+                'total_filtered' => $product->total(), // Adding filtered total
+            ]);    
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
+    }
+
     public function performance(Request $request)
     {
         try
@@ -158,19 +203,6 @@ class ProductsController extends AppController
         {
             return $this->app_catch($e);
         }
-    }
-
-     public function history_performance($id)
-    {
-        $product    = Product::select('m_products.product_id', 'm_products.product_name', 'b.price', 'b.return_1day', 'b.return_3day', 'b.return_1month', 'b.return_3month', 'b.return_6month', 'b.return_1year','b.return_3year','b.return_5year', 'c.asset_class_name', 'c.asset_class_color', 'd.asset_category_name', 'e.issuer_name', 'e.issuer_logo', 'f.profile_name')
-                    ->join('m_products_period as b', 'm_products.product_id', '=', 'b.product_id')
-                    ->leftJoin('m_asset_class as c', function($qry) { $qry->on('m_products.asset_class_id', '=', 'c.asset_class_id')->where('b.is_active', 'Yes'); })
-                    ->leftJoin('m_asset_categories as d', function($qry) { $qry->on('c.asset_category_id', '=', 'd.asset_category_id')->where('d.is_active', 'Yes'); })
-                    ->leftJoin('m_issuer as e', function($qry) { $qry->on('m_products.issuer_id', '=', 'e.issuer_id')->where('e.is_active', 'Yes'); })
-                    ->leftJoin('m_risk_profiles as f', function($qry) { $qry->on('m_products.profile_id', '=', 'f.profile_id')->where('f.is_active', 'Yes'); })
-                    ->where([['m_products.product_id', $id], ['m_products.is_active', 'Yes'], ['b.is_active', 'Yes']])
-                    ->first();
-         return $this->app_response('History Product Performance', $product);    
     }
 
     public function product_score_performance($id)

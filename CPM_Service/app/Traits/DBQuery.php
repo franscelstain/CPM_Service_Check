@@ -201,7 +201,7 @@ trait DBQuery
         $sqto   = $model::where(array_merge([['is_active', 'Yes']], $filter))->max('sequence_to');
         return !empty($sqto) ? $sqto + 1 : 1;
     }
-    
+
     private function form_input($request, $model, $id)
     {
         $data       = $audit = [];
@@ -211,7 +211,7 @@ trait DBQuery
         
         if ($request->method() != 'DELETE')
         {
-            $dt         = $act == 'updated' ? $model::find($id) : [];
+            $dt         = $act == 'updated' ? $model::find($id) : null;
             $foreignKey = !empty($request->input('foreignKey')) ? $request->input('foreignKey') : '';
             $fid        = !empty($foreignKey) && !empty($foreignKey['id']) ? $foreignKey['id'] : '&^%';
             $data       = ['is_active' => 'Yes'];
@@ -224,26 +224,25 @@ trait DBQuery
                     case 'created_by'   : $data[$act.'_by']   = !empty($request->input('created_by')) ? $request->input('created_by') : $manager->user; break;
                     case 'created_host' : $data[$act.'_host'] = $ip; break;
                     default             :
-                        
+
                         $inp_data = false;
-                        if (in_array('is_data', $column))
-                        {
-                            if (!is_null($request->input($fn)))
+                        if (in_array('is_data', $column)) {
+                            if (!is_null($request->input($fn))) {
                                 $inp_data = true;
+                            }
                         }
-                        else if ($request->has($fn))
+                        else if ($request->has($fn)) {
                             $inp_data = true;
-                        
+                        }
+
                         if ($inp_data)
                         {
-                            $data[$fn]  = !empty($request->input($fn)) || is_numeric($request->input($fn)) ? $request->input($fn) : null;
+                            $data[$fn]  = (!empty($request->input($fn)) || is_numeric($request->input($fn))) ? $request->input($fn) : null;
                             $input      = !is_array($request->input($fn)) ? $request->input($fn) : implode(',', $request->input($fn));
-                            if ($request->method() == 'POST')
-                            {
+
+                            if ($request->method() == 'POST') {
                                 $audit[] = $fn . ': ' . $input;
-                            }
-                            elseif (empty($dt->$fn) || (!empty($dt->$fn) && $dt->$fn != $request->input($fn)))
-                            {
+                            } elseif (is_object($dt) && (empty($dt->$fn) || (!empty($dt->$fn) && $dt->$fn != $request->input($fn)))){
                                 $field      = !is_array($dt->$fn) ? $dt->$fn : implode(',', $dt->$fn);
                                 $audit[]    = $fn .' from "'. $field .'" to "'. $input .'"';
                             }

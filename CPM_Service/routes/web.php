@@ -15,15 +15,16 @@ use PhpAmqpLib\Message\AMQPMessage;
 |
 */
 
-/*$router->get('/', function () use ($router) {
+$router->get('/', function () use ($router) {
     return $router->app->version();
-});*/
+});
 
 // API route group
 $router->group(['prefix' => 'api'], function() use ($router) {
-    
-    
-    
+    $router->get('ldap/ping',   'LdapTestController@ping');
+    $router->post('ldap/login', 'LdapTestController@login');
+    $router->post('ldap/search', 'LdapTestController@search');
+
     $router->group(['middleware' => 'auth'], function() use ($router) {
         include('admin.php');
         include('sales.php');
@@ -59,8 +60,9 @@ $router->group(['prefix' => 'api'], function() use ($router) {
                 $router->get('benchmark/{id}', 'SA\Assets\Products\ProductsController@performance_benchmark');
                 $router->get('detail/{id}', 'SA\Assets\Products\ProductsController@performance_detail');
                 $router->get('detail', 'SA\Assets\Products\ProductsController@performance_detail');
-                $router->get('recomendation', 'SA\Assets\Products\ProductsController@product_recomendation');
                 $router->get('history-performance/{id}', 'SA\Assets\Products\ProductsController@history_performance');
+                $router->post('mutual-fund-list', 'SA\Assets\Products\ProductsController@mutual_fund_list');
+                $router->get('recomendation', 'SA\Assets\Products\ProductsController@product_recomendation');
                 $router->get('score-performance/{id}', 'SA\Assets\Products\ProductsController@product_score_performance');
                 $router->get('/', 'SA\Assets\Products\ProductsController@performance');
             });
@@ -103,10 +105,11 @@ $router->group(['prefix' => 'api'], function() use ($router) {
     });
     
     $router->group(['prefix' => 'auth'], function() use ($router) {
-        $router->post('admin/login', 'Auth\AdminController@login');
+        $router->post('admin/login', 'Auth\Users\AuthController@login');
         $router->group(['prefix' => 'investor'], function() use ($router) {
-            $router->post('email/verify', ['as' => 'email.verify', 'uses' => 'Auth\InvestorController@emailVerify']);
-            $router->post('login', 'Auth\InvestorController@login');
+            $router->post('email/verify', ['as' => 'email.verify', 'uses' => 'Auth\Investor\EmailVerifyController@verifyEmail']);
+            $router->post('login', 'Auth\Investor\AuthController@login');
+            $router->post('login-otp', 'Auth\Investor\AuthController@otpLogin');
             $router->post('password/email', 'Auth\InvestorController@password_email');
             $router->post('register', 'Auth\InvestorController@register');
             $router->post('register/check-identity', 'Auth\InvestorController@check_identity');
@@ -115,18 +118,21 @@ $router->group(['prefix' => 'api'], function() use ($router) {
         });
     });
 
+    $router->get('sales/assets-liab', 'Financial\Condition\AssetsLiabilitiesController@list_for_sales');
+
     $router->group(['prefix' => 'balance'], function () use ($router) {
-        $router->get('assets-liabilities/total/{id}', 'Sales\Balance\AssetOutstandingController@totalAssetsLiabilities');
+        $router->get('assets-liabilities/total/{id}', 'Sales\Balance\AssetsLiabilitiesController@totalAssetsLiabilities');
         $router->group(['prefix' => 'asset-outstanding'], function () use ($router) {
-            $router->get('return/{id}', 'Sales\Balance\AssetOutstandingController@totalReturnAssets');
-            $router->get('bank/{id}', 'Sales\Balance\AssetOutstandingController@bank');
-            $router->get('bonds/{id}', 'Sales\Balance\AssetOutstandingController@bonds');
-            $router->get('category/{id}', 'Sales\Balance\AssetOutstandingController@category');
-            $router->get('insurance/{id}', 'Sales\Balance\AssetOutstandingController@insurance');
-            $router->get('mutual-fund/{id}', 'Sales\Balance\AssetOutstandingController@mutual_fund');
-            $router->get('mutual-fund-class/{id}', 'Sales\Balance\AssetOutstandingController@mutual_fund_class');
+            $router->get('bank/{id}', 'Sales\Balance\AssetOutstandingController@listAssetBank');
+            $router->get('bonds/{id}', 'Sales\Balance\AssetOutstandingController@listBondsAsset');
+            $router->get('category/{id}', 'Sales\Balance\AssetOutstandingController@getAssetCategory');
+            $router->get('insurance/{id}', 'Sales\Balance\AssetOutstandingController@listInsuranceAsset');
+            $router->get('latest-date/{id}', 'Sales\Balance\AssetOutstandingController@assetLatestDate');
+            $router->get('mutual-fund/{id}', 'Sales\Balance\AssetOutstandingController@listMutualFundAsset');
+            $router->get('mutual-fund-class/{id}', 'Sales\Balance\AssetOutstandingController@getAssetMutualClass');
+            $router->get('return/{id}', 'Sales\Balance\AssetOutstandingController@totalReturnAsset');
         });
-        $router->get('liabilities/{id}', 'Sales\Balance\LiabilitiesOutstandingController@liabilities');
+        $router->get('liabilities/{id}', 'Sales\Balance\LiabilitiesOutstandingController@listLiability');
     });
     
     /* Broker - Message Publish*/
@@ -160,6 +166,7 @@ $router->group(['prefix' => 'api'], function() use ($router) {
     $router->group(['prefix' => 'cronjob'], function() use ($router) {
         $router->get('asset-outstanding', 'Administrative\Cronjob\AssetOutstandingController@getData');
         $router->get('bancas-outstanding', 'Administrative\Cronjob\BancasOutstandingController@getData');
+        $router->get('delete-old-asset-outstanding', 'Administrative\Cronjob\AssetOutstandingController@deleteOldAssetOutstandings');
         $router->get('edd_investor', 'Administrative\Cronjob\InvestorsController@api_edd');
         $router->get('fee-outstanding', 'Administrative\Cronjob\LiabilitiesOutstandingController@fee_outstanding');
         $router->get('investor-valid', 'Administrative\Cronjob\InvestorsController@valid_account');

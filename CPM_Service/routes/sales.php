@@ -62,7 +62,8 @@ $router->group(['middleware' => 'is_admin'], function () use ($router) {
 
 
         $router->group(['prefix' => 'investor'], function () use ($router) {
-            $router->get('{id}', 'Users\InvestorController@detail_with_sales');
+            $router->post('list-balance', 'Users\InvestorsController@listWithBalanceForSales');
+            $router->get('{inv_id}', 'Users\InvestorsController@detailInvestorBySales');
             $router->get('/', 'Users\InvestorController@list_for_sales');
         });
 
@@ -81,8 +82,10 @@ $router->group(['middleware' => 'is_admin'], function () use ($router) {
         $router->put('change-photo', 'Users\SalesController@change_photo');
         $router->get('product/benchmark', 'SA\Assets\Products\ProductsController@benchmark');
         $router->get('product/{id}', 'SA\Assets\Products\ProductsController@product_detail');
-        $router->get('report/aum_priority', 'Users\SalesController@aum_priority');
-        $router->get('report/drop_fund', 'Users\SalesController@drop_fund');
+        // $router->get('report/aum_priority', 'Users\SalesController@aum_priority');
+        $router->post('report/aum_priority', 'Users\Investor\AumPriorityController@listAumPriority');
+        // $router->get('report/drop_fund', 'Users\SalesController@drop_fund');
+        $router->post('report/drop-fund', 'Users\Investor\AumPriorityController@listDropFund');
         $router->get('users/transaction/total/{id}', 'Users\SalesController@transaction_total');
         $router->get('users/transaction/total2/{id}', 'Users\SalesController@transaction_total2');
         $router->get('/', 'Users\SalesController@index');

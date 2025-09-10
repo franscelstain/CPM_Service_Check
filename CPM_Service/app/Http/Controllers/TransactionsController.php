@@ -270,157 +270,6 @@ class TransactionsController extends AppController
             return $this->app_catch($e);
         }
     }
-    
-    public function portfolio_balance(Request $request)
-    {
-        try
-        {
-            $portf  = $dates = [];
-            $no     = 1;
-            $id     = $this->auth_user()->id;
-            $user   = in_array($this->auth_user()->usercategory_name, ['Investor', 'Sales']) ? $this->auth_user()->usercategory_name == 'Investor' ? 'ui.investor_id' : 'ui.sales_id' : '';
-            $cName  = $this->auth_user()->usercategory_name;
-
-            if ($this->auth_user()->usercategory_name == 'Sales')
-            {
-                $no     = !empty($request->month) ? $request->month <= intval(date('m')) ? $request->month >= 1 ? $request->month : 1 : intval(date('m')) : intval(date('m'));
-                $date   = $date = $no > 9 ? date('Y-'. $no .'-d') : date('Y-0'. $no .'-d');
-                $dates  = DB::table('t_trans_histories_days')
-                        ->select(DB::raw("DISTINCT ON (date_trunc('month', history_date)) history_date"))
-                        ->where('history_date', '>=', DB::raw("date_trunc('year', '". $date ."'::timestamp)"))
-                        ->where('history_date', '<=', $date)
-                        ->whereIn('investor_id', function($qry) use ($id) {
-                            $qry->select('investor_id')
-                                ->from('u_investors')
-                                ->where('sales_id', $id)
-                                ->where('is_active', 'Yes');
-                        })
-                        ->orderBy(DB::raw("date_trunc('month', history_date)"))
-                        ->pluck('history_date');
-            }
-            else
-            {
-                $ymd = !empty($request->date) ? ' '. $request->date : '';
-                $no = !empty($request->day) ? $request->day : 1;
-                for ($i = ($no-1); $i >= 0; $i--)
-                {
-                    $dates[] = date('Y-m-d', strtotime('-'. $i .' days '. $ymd));
-                }
-            }
-            
-            $query  = DB::table('t_trans_histories_days as thd')
-                    ->join('u_investors as ui', 'ui.investor_id', 'thd.investor_id')
-                    ->join('m_products as mp', 'mp.product_id', 'thd.product_id')
-                    ->whereIn('thd.history_date', $dates)
-                    ->where([ 
-                        ['ui.is_active', 'Yes'], 
-                        ['mp.is_active', 'Yes'], 
-                        ['thd.is_active', 'Yes']
-                    ])
-                    ->where('thd.current_balance', '>=', 1)                    
-                    ->groupBy('thd.history_date')
-                    ->orderBy('thd.history_date');
-            
-            if (!empty($user))
-            {
-                if ($this->auth_user()->usercategory_name == 'Investor')
-                {
-                    $portf  = $query->select(
-                                DB::raw('LEFT(portfolio_id, 1) as portfolio'), 'thd.history_date', 'thd.account_no', 'mp.product_id', 'mp.product_name', 
-                                'mac.asset_class_id', 'mac.asset_class_name', 'mac.asset_class_color', DB::raw('SUM(thd.current_balance) as balance'))
-                            ->leftJoin('m_asset_class as mac', function($qry) { $qry->on('mac.asset_class_id', '=', 'mp.asset_class_id')->where('mac.is_active', 'Yes'); })
-                            ->where('ui.investor_id', $this->auth_user()->id)
-                            ->groupBy('portfolio', 'thd.history_date', 'thd.account_no', 'mp.product_id', 'mp.product_name', 'mac.asset_class_id', 'mac.asset_class_name', 'mac.asset_class_color')
-                            ->orderBy('thd.history_date')
-                            ->get();
-                }
-                else
-                {
-                    $portf  = $query->where($user, $this->auth_user()->id)
-                            ->select(
-                                'thd.history_date', 
-                                DB::raw("SUM(CASE WHEN LEFT(thd.portfolio_id, 1) = '2' THEN thd.current_balance ELSE 0 END)::float as goals"), 
-                                DB::raw("SUM(CASE WHEN LEFT(thd.portfolio_id, 1) = '1' OR thd.portfolio_id IS NULL THEN thd.current_balance ELSE 0 END)::float as non_goals")
-                            )
-                            ->orderBy('thd.history_date')
-                            ->get();
-                }
-            }
-            else
-            {
-                $portf  = $query->select(
-                            'thd.history_date',
-                            DB::raw('SUM(thd.current_balance) as balance'),
-                        )
-                        ->get();
-            }
-
-            
-            if ($cName == 'Investor')
-            {
-                $res = [];
-                $histDate = '';
-                foreach ($portf as $dt)
-                {
-                    if ($histDate != $dt->history_date)
-                    {
-                        $res[$dt->history_date] = [
-                            'non_goals' => [
-                                'balance' => $dt->portfolio != 2 ? floatval($dt->balance) : 0, 
-                                'asset' => $dt->portfolio != 2 ? [$dt->asset_class_name => ['name' => $dt->asset_class_name, 'amount' => floatval($dt->balance), 'color' => $dt->asset_class_color]] : [], 
-                                'product' => $dt->portfolio != 2 ? [['product_name' => $dt->product_name, 'balance_amount' => $dt->balance, 'account_no' => $dt->account_no]] : []
-                            ], 
-                            'goals' => $dt->portfolio == 2 ? floatval($dt->balance) : 0
-                        ];
-                        $histDate = $dt->history_date;
-                    }
-                    else
-                    {
-                        if ($dt->portfolio != 2)
-                        {
-                            $assetNm = $dt->asset_class_name;
-                            if (isset($res[$dt->history_date]['non_goals']['asset'][$assetNm]))
-                            {
-                                $res[$dt->history_date]['non_goals']['asset'][$assetNm]['amount'] += floatval($dt->balance);
-                            }
-                            else
-                            {
-                                $res[$dt->history_date]['non_goals']['asset'][$assetNm] = ['name' => $dt->asset_class_name, 'amount' => floatval($dt->balance), 'color' => $dt->asset_class_color];
-                            }
-                            $res[$dt->history_date]['non_goals']['balance'] += floatval($dt->balance);
-                            $res[$dt->history_date]['non_goals']['product'][] = ['product_name' => $dt->product_name, 'balance_amount' => $dt->balance, 'account_no' => $dt->account_no];
-                        }
-                        else
-                        {
-                            $res[$dt->history_date]['goals'] += floatval($dt->balance);
-                        }
-                    }
-                }
-            }
-            else
-            {
-                $res = $portf->keyBy('history_date')->map(function ($item) use ($cName) {
-                    if ($cName == 'Super Admin')
-                    {
-                        return floatval($item->balance);
-                    }
-                    else
-                    {
-                        $item->goals = floatval($item->goals);
-                        $item->non_goals = floatval($item->non_goals);
-                        unset($item->history_date);
-                        return $item;
-                    }
-                });
-            }
-
-            return $this->app_response('Portfolio Balance', $res);
-        }
-        catch (\Exception $e)
-        {
-            return $this->app_catch($e);
-        }
-    }
 
     public function redeem(Request $request)
     {   
@@ -1870,5 +1719,302 @@ class TransactionsController extends AppController
         {
             return $this->app_catch($e);
         }
+    }
+    
+    public function portfolio_balance(Request $request)
+    {
+        try
+        {
+            $userId = $this->auth_user()->id;
+            $cName  = $this->auth_user()->usercategory_name;
+            $dates  = $this->getOutstandingDatesByRole($request, $cName, $userId);
+            $res    = [];
+
+            if (!empty($dates)) {                
+                $goals = DB::table('t_trans_histories_days as thd')
+                        ->join('u_investors as ui', 'ui.investor_id', 'thd.investor_id')
+                        ->whereIn('thd.history_date', $dates)
+                        ->where('thd.is_active', 'Yes')
+                        ->where('ui.is_active', 'Yes')
+                        ->whereRaw("LEFT(thd.portfolio_id, 1) = '2'")
+                        ->orderBy('thd.history_date');
+                
+                if ($cName === 'Investor')
+                {
+                    $placeholders = implode(',', array_fill(0, count($dates), '?'));
+                    $bindings = array_merge([$userId], $dates);
+                    $nonGoals = DB::select("
+                        SELECT account_no, outstanding_date, product_id, product_name, asset_class_id, 
+                                asset_class_name, asset_class_color, 1 as portfolio, SUM(balance_amount) AS balance
+                        FROM (
+                            SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                                    tao.account_no, tao.outstanding_date, mp.product_id, mp.product_name, 
+                                    mac.asset_class_id, mac.asset_class_name, mac.asset_class_color, tao.balance_amount
+                            FROM t_assets_outstanding tao
+                            JOIN u_investors ui ON tao.investor_id = ui.investor_id
+                            JOIN m_products mp ON tao.product_id = mp.product_id
+                            LEFT JOIN m_asset_class mac ON mp.asset_class_id = mac.asset_class_id AND mac.is_active = 'Yes'
+                            WHERE tao.investor_id = ?
+                                AND tao.outstanding_date IN ($placeholders)
+                                AND tao.is_active = 'Yes'
+                                AND ui.is_active = 'Yes'
+                                AND mp.is_active = 'Yes'
+                            ORDER BY tao.investor_id, tao.account_no, tao.product_id, tao.data_date DESC, tao.outstanding_id DESC
+                        ) AS assets
+                        GROUP BY account_no, outstanding_date, product_id, product_name, 
+                                asset_class_id, asset_class_name, asset_class_color
+                    ", $bindings);
+
+                    $goals = $goals->join('m_products as mp', 'mp.product_id', 'thd.product_id')
+                            ->leftJoin('m_asset_class as mac', function($join) { 
+                                $join->on('mac.asset_class_id', '=', 'mp.asset_class_id')->where('mac.is_active', 'Yes'); 
+                            })
+                            ->where('ui.investor_id', $userId)
+                            ->where('mp.is_active', 'Yes')
+                            ->groupBy(
+                                'thd.history_date', 'thd.account_no', 'mp.product_id', 'mp.product_name', 
+                                'mac.asset_class_id', 'mac.asset_class_name', 'mac.asset_class_color'
+                            )
+                            ->select(
+                                'thd.history_date', 'thd.account_no', 'mp.product_id', 'mp.product_name', 
+                                'mac.asset_class_id', 'mac.asset_class_name', 'mac.asset_class_color', 
+                                DB::raw('2 as portfolio'), DB::raw('SUM(thd.current_balance) as balance')
+                            )
+                            ->get();
+
+                    $nonMap = [];
+                    foreach ($nonGoals as $dt) {
+                        $nonMap[$dt->outstanding_date]['non_goals']['product'][] = [
+                            'product_name' => $dt->product_name,
+                            'balance_amount' => floatval($dt->balance),
+                            'account_no' => $dt->account_no,
+                            'asset_class_name' => $dt->asset_class_name,
+                            'asset_class_color' => $dt->asset_class_color
+                        ];
+                    }
+        
+                    $goalMap = [];
+                    foreach ($goals as $dt) {
+                        $goalMap[$dt->history_date]['goals']['product'][] = [
+                            'product_name' => $dt->product_name,
+                            'balance_amount' => floatval($dt->balance),
+                            'account_no' => $dt->account_no,
+                            'asset_class_name' => $dt->asset_class_name,
+                            'asset_class_color' => $dt->asset_class_color
+                        ];
+                    }
+        
+                    $allDates = array_unique(array_merge(array_keys($nonMap), array_keys($goalMap)));
+        
+                    foreach ($allDates as $date) {
+                        $hasNonGoals = isset($nonMap[$date]['non_goals']['product']);
+                        $hasGoals = isset($goalMap[$date]['goals']['product']);
+        
+                        $nonGoalsData = $hasNonGoals ? $nonMap[$date]['non_goals']['product'] : [];
+                        $goalsData = $hasGoals ? $goalMap[$date]['goals']['product'] : [];
+        
+                        $goalsGrouped = collect($goalsData)->groupBy('product_name')->map(function ($items) {
+                            return $items->sum('balance_amount');
+                        });
+        
+                        $nonFiltered = [];
+                        foreach ($nonGoalsData as $item) {
+                            $productName = $item['product_name'];
+                            $amount = $item['balance_amount'];
+        
+                            if (isset($goalsGrouped[$productName])) {
+                                $amount -= $goalsGrouped[$productName];
+                                unset($goalsGrouped[$productName]);
+                            }
+        
+                            if ($amount > 0) {
+                                $nonFiltered[] = [
+                                    'product_name' => $item['product_name'],
+                                    'balance_amount' => $amount,
+                                    'account_no' => $item['account_no'],
+                                    'asset_class_name' => $item['asset_class_name'],
+                                    'asset_class_color' => $item['asset_class_color']
+                                ];
+                            }
+                        }
+        
+                        if (empty($nonFiltered) && empty($goalsData)) {
+                            continue;
+                        }
+        
+                        $res[$date] = [];
+        
+                        $assets = [];
+                        $balance = 0;
+                        foreach ($nonFiltered as $nf) {
+                            $balance += $nf['balance_amount'];
+                            $acn = $nf['asset_class_name'];
+                            if (!isset($assets[$acn])) {
+                                $assets[$acn] = [
+                                    'name' => $acn,
+                                    'amount' => $nf['balance_amount'],
+                                    'color' => $nf['asset_class_color']
+                                ];
+                            } else {
+                                $assets[$acn]['amount'] += $nf['balance_amount'];
+                            }
+                        }
+        
+                        $res[$date]['non_goals'] = $balance > 0 ? [
+                            'balance' => $balance,
+                            'asset' => $assets,
+                            'product' => array_map(function ($p) {
+                                unset($p['asset_class_name'], $p['asset_class_color']);
+                                return $p;
+                            }, $nonFiltered)
+                        ] : [];
+        
+                        if ($hasGoals) {
+                            $goalBalance = 0;
+                            $goalAssets = [];
+                            $goalProducts = [];
+        
+                            foreach ($goalsData as $g) {
+                                $goalBalance += $g['balance_amount'];
+                                $acn = $g['asset_class_name'];
+                                if (!isset($goalAssets[$acn])) {
+                                    $goalAssets[$acn] = [
+                                        'name' => $acn,
+                                        'amount' => $g['balance_amount'],
+                                        'color' => $g['asset_class_color']
+                                    ];
+                                } else {
+                                    $goalAssets[$acn]['amount'] += $g['balance_amount'];
+                                }
+        
+                                $goalProducts[] = [
+                                    'product_name' => $g['product_name'],
+                                    'balance_amount' => $g['balance_amount'],
+                                    'account_no' => $g['account_no']
+                                ];
+                            }
+        
+                            $res[$date]['goals'] = [
+                                'balance' => $goalBalance,
+                                'asset' => $goalAssets,
+                                'product' => $goalProducts
+                            ];
+                        } else {
+                            $res[$date]['goals'] = [];
+                        }
+                    }
+                } else {
+                    $whereSales = '';
+                    $bindings = [];
+                    
+                    if ($cName === 'Sales') {
+                        $whereSales = 'AND ui.sales_id = ?';
+                        $bindings[] = $userId;
+                        $goals->where('ui.sales_id', $userId);
+                    }
+
+                    $placeholders = implode(',', array_fill(0, count($dates), '?'));
+                    $bindings = array_merge($dates, $bindings);
+
+                    $sql = "
+                        SELECT outstanding_date, SUM(balance_amount) AS non_goals
+                        FROM (
+                            SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                                tao.outstanding_date, tao.balance_amount
+                            FROM t_assets_outstanding tao
+                            JOIN u_investors ui ON tao.investor_id = ui.investor_id
+                            JOIN m_products mp ON tao.product_id = mp.product_id
+                            JOIN m_asset_class mac ON mp.asset_class_id = mac.asset_class_id
+                            JOIN m_asset_categories mact ON mac.asset_category_id = mact.asset_category_id
+                            WHERE tao.outstanding_date IN ($placeholders)
+                                AND tao.is_active = 'Yes'
+                                AND ui.is_active = 'Yes'
+                                AND mp.is_active = 'Yes'
+                                AND mac.is_active = 'Yes'
+                                AND mact.is_active = 'Yes'
+                                $whereSales
+                            ORDER BY tao.investor_id, tao.account_no, tao.product_id, tao.data_date DESC, tao.outstanding_id DESC
+                        ) AS assets
+                        GROUP BY outstanding_date
+                    ";
+
+                    $nonGoalsQry = DB::select($sql, $bindings);
+                    $nonGoals = collect($nonGoalsQry)->pluck('non_goals', 'outstanding_date')->toArray();
+
+                    $goals = $goals->groupBy('thd.history_date')
+                            ->select('thd.history_date', DB::raw("SUM(thd.current_balance)::float as goals"))
+                            ->pluck('goals', 'thd.history_date')
+                            ->toArray();
+
+                    $allDates = array_unique(array_merge(array_keys($nonGoals), array_keys($goals)));
+
+                    foreach ($allDates as $date) {
+                        $non = isset($nonGoals[$date]) ? floatval($nonGoals[$date]) : 0;
+                        $goal = isset($goals[$date]) ? floatval($goals[$date]) : 0;
+                
+                        // Kurangi non_goals jika ada goals
+                        $adjustedNon = max($non - $goal, 0);
+                
+                        if ($cName === 'Super Admin') {
+                            // Format khusus untuk Super Admin: hanya total
+                            $res[$date] = $adjustedNon + $goal;
+                        } else {
+                            // Format default: goals dan non_goals
+                            $res[$date] = [
+                                'non_goals' => $adjustedNon,
+                                'goals' => $goal
+                            ];
+                        }
+                    }
+                }
+            }
+            return $this->app_response('Portfolio Balance', $res);
+        }
+        catch (\Exception $e)
+        {
+            return $this->app_catch($e);
+        }
+    }
+
+    private function getOutstandingDatesByRole($request, $role, $userId)
+    {
+        if ($role === 'Sales') {
+            $today = Carbon::now();
+            $todayStr = $today->format('Y-m-d');
+            $startOfYear = $today->copy()->startOfYear()->format('Y-m-d');
+            $endOfPrevMonth = $today->copy()->subMonth()->endOfMonth()->format('Y-m-d');
+            
+            // Ambil investor aktif
+            $investorIds = DB::table('u_investors')
+                ->where('sales_id', $userId)
+                ->where('is_active', 'Yes')
+                ->pluck('investor_id');
+
+            // Ambil tanggal terakhir dari setiap bulan SEBELUM bulan ini
+            $dates = DB::table('t_assets_outstanding')
+                ->select(DB::raw('MAX(outstanding_date) as latest_date'))
+                ->whereIn('investor_id', $investorIds)
+                ->where('is_active', 'Yes')
+                ->whereBetween('outstanding_date', [$startOfYear, $endOfPrevMonth])
+                ->groupBy(DB::raw("DATE_TRUNC('month', outstanding_date)"))
+                ->orderBy(DB::raw("DATE_TRUNC('month', outstanding_date)"))
+                ->pluck('latest_date')
+                ->toArray();
+
+            // Tambahkan tanggal hari ini untuk bulan ini
+            $dates[] = $todayStr;
+
+            return array_values(array_unique($dates));
+        } else {
+            $dates = [];
+            $ymd = !empty($request->date) ? ' '. $request->date : '';
+            $no = !empty($request->day) ? $request->day : 1;
+            for ($i = ($no-1); $i >= 0; $i--) {
+                $dates[] = date('Y-m-d', strtotime('-'. $i .' days '. $ymd));
+            }
+            return $dates;
+        }
+
+        return [];
     }
 }

@@ -67,46 +67,25 @@ class LiabilitiesOutstandingRepository implements LiabilitiesOutstandingReposito
 
     public function liabilityHasanahCard($investorId, $latestDate)
     {
-        // Subquery untuk mendapatkan data_date terbaru
-        $subQuery = DB::table('t_liabilities_outstanding as tlo')
-            ->select(
-                'tlo.liabilities_id', 
-                DB::raw('MAX(tlo.data_date) as max_data_date'),
-                DB::raw('MAX(tlo.created_at) as max_created_at')
-            )
-            ->where([
-                ['tlo.investor_id', $investorId],
-                ['tlo.is_active', 'Yes'],
-                ['tlo.outstanding_date', $latestDate],
-                [DB::raw("LOWER(tlo.liabilities_type)"), '=', 'card'],
-            ])
-            ->groupBy('tlo.liabilities_id');
-
-        return DB::table('t_liabilities_outstanding as tlo')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tlo.liabilities_id', '=', 'latest_data.liabilities_id')
-                    ->on('tlo.data_date', '=', 'latest_data.max_data_date')
-                    ->on('tlo.created_at', '=', 'latest_data.max_created_at');
-            })
-            ->where([
-                ['tlo.investor_id', $investorId],
-                ['tlo.is_active', 'Yes'],
-                ['tlo.outstanding_balance', '>=', 1],
-                ['tlo.outstanding_date', $latestDate],
-                [DB::raw("LOWER(tlo.liabilities_type)"), '=', 'card'],
-            ])
-            ->select(
-                'tlo.data_date',
-                'tlo.liabilities_sub_type',
-                'tlo.collectability_account_name',
-                'tlo.account_id',
-                'tlo.outstanding_balance',
-                'tlo.remaining_amount',
-                'tlo.limit_amount',
-                DB::raw('MAX(tlo.data_date) OVER () as latest_data_date')
-            )
-            ->distinct()
-            ->get();
+        return DB::select("
+            SELECT DISTINCT ON (tlo.investor_id, tlo.liabilities_id)
+                tlo.liabilities_sub_type,
+                tlo.collectability_account_name,
+                tlo.account_id,
+                tlo.outstanding_balance,
+                tlo.remaining_amount,
+                tlo.limit_amount,
+                tlo.data_date
+            FROM t_liabilities_outstanding as tlo
+            JOIN u_investors ui ON tlo.investor_id = ui.investor_id
+            WHERE tlo.investor_id = ?
+                AND tlo.outstanding_date = ?
+                AND LOWER(tlo.liabilities_type) = 'card'
+                AND tlo.outstanding_balance >= 1
+                AND tlo.is_active = 'Yes'
+                AND ui.is_active = 'Yes'
+            ORDER BY tlo.investor_id, tlo.liabilities_id, tlo.data_date DESC, tlo.liabilities_outstanding_id DESC
+        ", [$investorId, $latestDate]);
     }
 
     public function liabilityLatestDate($investorId, $outDate)
@@ -120,65 +99,47 @@ class LiabilitiesOutstandingRepository implements LiabilitiesOutstandingReposito
     
     public function liabilityPembiayaan($investorId, $latestDate)
     {
-        // Subquery untuk mendapatkan data_date terbaru
-        $subQuery = DB::table('t_liabilities_outstanding as tlo')
-            ->select(
-                'tlo.liabilities_id', 
-                DB::raw('MAX(tlo.data_date) as max_data_date'),
-                DB::raw('MAX(tlo.created_at) as max_created_at')
-            )
-            ->where(function ($query) {
-                $query->where(DB::raw("LOWER(tlo.liabilities_type)"), '!=', 'card')
-                      ->orWhereNull('tlo.liabilities_type');
-            })
-            ->where([
-                ['tlo.investor_id', $investorId],
-                ['tlo.is_active', 'Yes'],
-                ['tlo.outstanding_date', $latestDate],
-            ])
-            ->groupBy('tlo.liabilities_id');
-
-        return DB::table('t_liabilities_outstanding as tlo')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tlo.liabilities_id', '=', 'latest_data.liabilities_id')
-                    ->on('tlo.data_date', '=', 'latest_data.max_data_date')
-                    ->on('tlo.created_at', '=', 'latest_data.max_created_at');
-            })
-            ->leftJoin('t_stg_exchange_rates as er', function ($join) {
-                $join->on('tlo.currency', '=', 'er.currency')
-                     ->on('tlo.data_date', '=', 'er.date');
-            })
-            ->where(function ($query) {
-                $query->where(DB::raw("LOWER(tlo.liabilities_type)"), '!=', 'card')
-                      ->orWhereNull('tlo.liabilities_type');
-            })
-            ->where([
-                ['tlo.investor_id', $investorId],
-                ['tlo.is_active', 'Yes'],
-                ['tlo.outstanding_balance', '>=', 1],
-                ['tlo.outstanding_date', $latestDate],
-            ])
-            ->select(
-                'tlo.data_date',
-                'tlo.liabilities_name',
-                'tlo.liabilities_id',
-                'er.rate',
-                'tlo.currency',
-                'tlo.outstanding_balance',
-                'tlo.outstanding_balance_idr',
-                'tlo.collectability_cif_name',
-                DB::raw('MAX(tlo.data_date) OVER () as latest_data_date')
-            )
-            ->distinct()
-            ->get();
+        return DB::select("
+            SELECT DISTINCT ON (tlo.investor_id, tlo.liabilities_id)
+                tlo.liabilities_id,
+                tlo.liabilities_name,
+                tlo.currency,
+                tlo.outstanding_balance,
+                tlo.outstanding_balance_idr,
+                tlo.collectability_cif_name,
+                tlo.data_date,
+                tse.rate
+            FROM t_liabilities_outstanding as tlo
+            JOIN u_investors ui ON tlo.investor_id = ui.investor_id
+            LEFT JOIN t_stg_exchange_rates as tse ON tlo.currency = tse.currency AND tlo.outstanding_date = tse.date
+            WHERE tlo.investor_id = ?
+                AND tlo.outstanding_date = ?
+                AND (LOWER(tlo.liabilities_type) != 'card' OR tlo.liabilities_type IS NULL)
+                AND tlo.outstanding_balance >= 1
+                AND tlo.is_active = 'Yes'
+                AND ui.is_active = 'Yes'
+            ORDER BY tlo.investor_id, tlo.liabilities_id, tlo.data_date DESC, tlo.liabilities_outstanding_id DESC
+        ", [$investorId, $latestDate]);
     }
 
-    public function totalLiability($investorId, $outDate)
+    public function totalLiability($investorId, $latestDate)
     {
-        return DB::table('t_liabilities_outstanding')
-            ->where('investor_id', $investorId)
-            ->where('outstanding_date', $outDate)
-            ->where('is_active', 'Yes')
-            ->sum('outstanding_balance');
+        $query = DB::selectOne("
+            SELECT 
+                SUM(outstanding_balance) as total_outstanding_balance
+            FROM (
+                SELECT DISTINCT ON (tlo.investor_id, tlo.liabilities_id)
+                    tlo.outstanding_balance
+                FROM t_liabilities_outstanding as tlo
+                JOIN u_investors ui ON tlo.investor_id = ui.investor_id
+                WHERE tlo.investor_id = ?
+                    AND tlo.outstanding_date = ?
+                    AND tlo.is_active = 'Yes'
+                    AND ui.is_active = 'Yes'
+                ORDER BY tlo.investor_id, tlo.liabilities_id, tlo.data_date DESC, tlo.liabilities_outstanding_id DESC
+            ) as filtered
+        ", [$investorId, $latestDate]);
+
+        return $query->total_outstanding_balance ?? 0;
     }
 }

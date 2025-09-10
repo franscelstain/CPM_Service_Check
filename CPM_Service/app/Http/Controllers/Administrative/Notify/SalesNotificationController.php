@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Investor\Notify;
+namespace App\Http\Controllers\Administrative\Notify;
 
 
 use App\Models\Administrative\Notify\SalesSetup;

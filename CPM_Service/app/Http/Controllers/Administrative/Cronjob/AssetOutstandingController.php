@@ -6,29 +6,45 @@ use App\Http\Controllers\AppController;
 use App\Models\Financial\AssetOutstanding;
 use App\Models\SA\Assets\Products\Product;
 use App\Models\Users\Investor\Investor;
+use App\Services\Handlers\Finance\AssetOutstandingService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 
 class AssetOutstandingController extends AppController
 {
+    protected $assetService;
+    
+    public function __construct(AssetOutstandingService $assetService)
+    {
+        $this->assetService = $assetService;
+    }
+
+    public function getData(Request $request)
+    {
+        try {
+            ini_set('max_execution_time', '14400');
+            
+            return response()->json($this->assetService->processInChunks($request));
+        } catch (\Throwable $e) {
+            \Log::error('Error running Asset Outstanding: ' . $e->getMessage());
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
+
     /**
      * @return void
      */
-    public function getData(Request $request)
+    public function getDataOld(Request $request)
     {
         try
         {
-	       ini_set('max_execution_time', '14400');
+	        ini_set('max_execution_time', '14400');
             $asset      = [];
             $success    = $fails = 0;
-            //$investor   = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes']])->get();
-            $investor   = Investor::where('is_active', 'Yes')->get();
-
-            //return $this->app_response('xxx', $investor);
-	       foreach ($investor as $inv)
+            $investor   = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes']])->get();
+	        foreach ($investor as $inv)
             {
                 $api = $this->api_ws(['sn' => 'InvestorAsset', 'val' => [$inv->cif]])->original['data'];
-          	//$api = $this->api_ws(['sn' => 'InvestorAsset', 'val' => ['90618206']])->original['data'];
-  	        //return $this->app_response('xxx', $api);
           
                 if (!empty($api))
                 {
@@ -118,10 +134,39 @@ class AssetOutstandingController extends AppController
 
     function getOutstandingID ($inv_id, $prod_id, $acc_no)
     {
-	ini_set('max_execution_time', '14400');
+        ini_set('max_execution_time', '14400');
         $out_id = AssetOutstanding::select('outstanding_id')
                 ->where([['is_active', 'Yes'], ['investor_id', $inv_id], ['product_id', $prod_id], ['account_no', $acc_no], ['outstanding_date', $this->app_date()]])
                 ->first();
         return $out_id;
+    }
+
+    public function deleteOldAssetOutstandings()
+    {
+        // Mendapatkan tanggal satu tahun yang lalu
+        $lastDateBeforePeriod = Carbon::now()->subMonths(12)->startOfMonth()->format('Y-m-d');
+
+        // 1. Menghapus semua data sebelum tanggal satu tahun yang lalu
+        AssetOutstanding::where('outstanding_date', '<', $lastDateBeforePeriod)
+            ->delete();
+
+        // 2. Mendapatkan data dari bulan lalu hingga satu tahun terakhir (misalnya Maret 2024 hingga Februari 2025)
+        $endPeriod = Carbon::now()->subMonths(1)->endOfMonth()->format('Y-m-d');
+        
+        $assetsToKeep = AssetOutstanding::whereBetween('outstanding_date', [$lastDateBeforePeriod, $endPeriod])
+            ->selectRaw('MAX(outstanding_date) as last_date, EXTRACT(YEAR FROM outstanding_date) as year, EXTRACT(MONTH FROM outstanding_date) as month')
+            ->groupByRaw('EXTRACT(YEAR FROM outstanding_date), EXTRACT(MONTH FROM outstanding_date)')
+            ->get();
+
+        $currentDate = Carbon::now()->startOfMonth()->format('Y-m-d');
+        AssetOutstanding::where('outstanding_date', '<', $currentDate)
+            ->whereNotIn('outstanding_date', $assetsToKeep->pluck('last_date'))
+            ->chunk(100, function ($assets) {
+                foreach ($assets as $asset) {
+                    $asset->delete();
+                }
+            });
+        
+        return response()->json(['message' => 'Old asset outstanding data cleaned up successfully.']);
     }
 }

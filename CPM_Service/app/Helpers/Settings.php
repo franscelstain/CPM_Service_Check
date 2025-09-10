@@ -1,5 +1,8 @@
 <?php
 
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Validator;
+
 if (! function_exists('__api'))
 {
     function __api($api)
@@ -112,5 +115,57 @@ if (! function_exists('socmed_email'))
     {
         $socmed = new App\Http\Controllers\SA\UI\SocialMediaController;
         return (object) $socmed->index()->original['data']['list'];
+    }
+}
+
+if (!function_exists('apiResponse')) {
+    /**
+     * Mengembalikan respon JSON standar.
+     *
+     * @param bool   $success  True jika operasi sukses, false jika ada error
+     * @param string $message  Pesan yang ingin ditampilkan
+     * @param mixed  $data     Data yang dikembalikan (opsional)
+     * @param mixed  $errors   Error yang dikembalikan (opsional)
+     * @param int|null $status Kode status HTTP (jika null, akan diset default: 200 untuk sukses, 400 untuk error)
+     * @return JsonResponse
+     */
+    function apiResponse(
+        string $message,
+        $data = [],
+        $errors = [],
+        int $status = null
+    ): JsonResponse {
+        $success = empty($errors) ? true : false;
+        if ($status === null) {
+            $status = $success ? 200 : 400;
+        }
+
+        return response()->json([
+            'success' => $success,
+            'message' => $message,
+            'data'    => $data,
+            'errors'  => !$success ? (array) $errors : [],
+        ], $status);
+    }
+}
+
+if (! function_exists('validateRequest'))
+{
+    /**
+     * Membuat instance validator dari data dan aturan yang diberikan.
+     *
+     * @param array $data            Data yang akan divalidasi (mis. $request->all())
+     * @param array $rules           Aturan validasi (mis. ['email' => 'required|email', 'password' => 'required|min:6'])
+     * @param array $messages        Pesan kustom (opsional)
+     * @param array $customAttributes Atribut kustom (opsional)
+     * @return \Illuminate\Contracts\Validation\Validator
+     */
+    function validateRequest(
+        array $data,
+        array $rules,
+        array $messages = [],
+        array $customAttributes = []
+    ) {
+        return Validator::make($data, $rules, $messages, $customAttributes);
     }
 }

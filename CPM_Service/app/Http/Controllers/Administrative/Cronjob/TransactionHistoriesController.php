@@ -14,16 +14,49 @@ use App\Models\Transaction\TransactionHistory;
 use App\Models\Transaction\TransactionHistoryDay;
 use App\Models\Transaction\TransactionInstallment;
 use App\Models\Users\Investor\Investor;
+use App\Services\Handlers\Finance\TransHistoriesService;
 use Illuminate\Http\Request;
+use DB;
 
 class TransactionHistoriesController extends AppController
 {
     public $table = 'Transaction\TransactionHistory';
+    protected $histService;
+    
+    public function __construct(TransHistoriesService $histService)
+    {
+        $this->histService = $histService;
+    }
+
+    public function getData(Request $request)
+    {
+        ini_set('max_execution_time', 14400);
+        
+        $offset = (int) $request->get('offset', 0);
+        $exhaust = $request->boolean('exhaust', false);
+
+        try {
+            $result = $this->histService->processRange($offset, $exhaust);
+            return response()->json([
+                'success' => true,
+                'offset' => $offset,
+                'exhaust' => $exhaust,
+                'processed' => count($result),
+                'investors_with_data' => array_keys($result),
+            ]);
+        } catch (\Throwable $e) {
+            \Log::error("[TransactionHistories] Error: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
     
     /**
      * @return void
      */
-    public function getData(Request $request)
+    public function getDataOld(Request $request)
     {
         try
         {
@@ -31,7 +64,7 @@ class TransactionHistoriesController extends AppController
 
             $trans      = [];
             $success    = $fails = 0;
-            $investor   = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes']])->get();
+            $investor   = Investor::where('is_active', 'Yes')->get();
 
             foreach ($investor as $inv)
             {
@@ -293,14 +326,57 @@ class TransactionHistoriesController extends AppController
     
     private function save_history_current($inv_id)
     {
-        $prd    = [];
-        $asset  = AssetOutstanding::selectRaw('account_no, b.product_id, d.diversification_account, regular_payment, SUM(outstanding_unit) as unit, SUM(total_subscription) as total_sub, SUM(total_unit) as total_unit, SUM(balance_amount) as balance')
-                ->join('m_products as b', 't_assets_outstanding.product_id', '=', 'b.product_id')
-                ->leftJoin('m_asset_class as c', function($qry) { $qry->on('b.asset_class_id', '=', 'c.asset_class_id')->where('c.is_active', 'Yes'); })
-                ->leftJoin('m_asset_categories as d', function($qry) { $qry->on('c.asset_category_id', '=', 'd.asset_category_id')->where('d.is_active', 'Yes'); })
-                ->where([['investor_id', $inv_id], ['t_assets_outstanding.is_active', 'Yes'], ['outstanding_date', $this->app_date()], ['b.is_active', 'Yes']])
-                ->groupBy(['account_no', 'b.product_id', 'd.diversification_account', 'regular_payment'])
-                ->get();
+        $prd = [];
+        $asset = DB::select("
+            SELECT 
+                account_no,
+                product_id,
+                diversification_account,
+                regular_payment,
+                SUM(outstanding_unit) as unit, 
+                SUM(total_subscription) as total_sub, 
+                SUM(total_unit) as total_unit, 
+                SUM(balance_amount) as balance,
+                SUM(avg_unit_cost) as avg_unit_cost,
+                SUM(investment_amount_original) as total_investment,
+                SUM(return_amount) as total_return,
+                SUM(return_percentage) as total_return_percent
+            FROM (
+                SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                    tao.account_no,
+                    tao.product_id,
+                    tao.balance_amount,
+                    tao.regular_payment,
+                    tao.outstanding_unit,
+                    tao.total_subscription,
+                    tao.total_unit,
+                    tao.avg_unit_cost,
+                    tao.investment_amount_original,
+                    tao.return_amount,
+                    tao.return_percentage,
+                    mact.diversification_account
+                FROM t_assets_outstanding tao
+                JOIN u_investors ui ON tao.investor_id = ui.investor_id AND ui.is_active = 'Yes'
+                JOIN m_products mp ON mp.product_id = tao.product_id AND mp.is_active = 'Yes'
+                JOIN m_asset_class mac ON mac.asset_class_id = mp.asset_class_id AND mac.is_active = 'Yes'
+                JOIN m_asset_categories mact ON mact.asset_category_id = mac.asset_category_id AND mact.is_active = 'Yes'
+                WHERE tao.outstanding_date = ?
+                    AND tao.is_active = 'Yes'
+                ORDER BY 
+                    tao.investor_id, 
+                    tao.account_no, 
+                    tao.product_id, 
+                    (tao.data_date IS NULL), 
+                    tao.data_date DESC, 
+                    tao.outstanding_id DESC
+            ) as asset
+            GROUP BY 
+                account_no,
+                product_id,
+                diversification_account,
+                regular_payment
+        ", [$this->app_date()]);
+
         foreach ($asset as $a)
         {
             $save   = true;
@@ -315,22 +391,30 @@ class TransactionHistoriesController extends AppController
                         $prd[$a->product_id] = !empty($price->price_value) ? $price->price_value : 0;
                     }
 		    
-		            $rst        = $this->cut_of_time($a->product_id,'array');
-                    $transaction_date =  !empty($rst['transaction_date_allocation']) ? $rst['transaction_date_allocation'] : $this->app_date() ;
-                    $trans      = TransactionHistoryDay::selectRaw('SUM(unit) as unit, SUM(total_sub_amount) as total_amount, SUM(total_sub_unit) as total_unit')
-                                ->where([['investor_id', $inv_id], ['product_id', $a->product_id], ['account_no', $a->account_no], ['history_date', $transaction_date], ['is_active', 'Yes']])
-                                ->whereRaw("LEFT(portfolio_id, 1) IN ('2', '3')")
-                                ->first();
-                    $unit       = !empty($trans->unit) ? $a->unit - $trans->unit : $a->unit;
+		            $rst = $this->cut_of_time($a->product_id,'array');
+                    $transaction_date = !empty($rst['transaction_date_allocation']) ? $rst['transaction_date_allocation'] : $this->app_date() ;
+                    $trans = TransactionHistoryDay::selectRaw('SUM(unit) as unit, SUM(total_sub_amount) as total_amount, SUM(total_sub_unit) as total_unit')
+                            ->where([['investor_id', $inv_id], ['product_id', $a->product_id], ['account_no', $a->account_no], ['history_date', $transaction_date], ['is_active', 'Yes']])
+                            ->whereRaw("LEFT(portfolio_id, 1) IN ('2', '3')")
+                            ->first();
+                    $unit = !empty($trans->unit) ? $a->unit - $trans->unit : $a->unit;
                     if ($unit > 0)
-                    {
-                        $current    = $unit * $prd[$a->product_id];
-                        $total_sub  = !empty($trans->total_amount) ? $a->total_sub - $trans->total_amount : $a->total_sub;
-                        $total_unit = !empty($trans->unit) ? $a->total_unit - $trans->total_unit : $a->total_unit;
-                        $avg        = $total_unit != 0 ? $total_sub / $total_unit : 0;
-                        $amt        = $avg * $unit;
-                        $earnings   = $current - $amt;
-                        $returns    = $amt != 0 ? $earnings / $amt * 100 : 0;
+                    {                       
+                        if (!empty($trans->unit)) {        
+                            $current = $unit * $prd[$a->product_id];                
+                            $total_sub  = !empty($trans->total_amount) ? $a->total_sub - $trans->total_amount : $a->total_sub;
+                            $total_unit = !empty($trans->total_unit) ? $a->total_unit - $trans->total_unit : $a->total_unit;
+                            $avg        = $total_unit != 0 ? $total_sub / $total_unit : 0;
+                            $amt        = $avg * $unit;
+                            $earnings   = $current - $amt;
+                            $returns    = $amt != 0 ? $earnings / $amt * 100 : 0;
+                        } else {
+                            $current = $a->balance;
+                            $avg = $a->avg_unit_cost;
+                            $amt = $a->total_investment;
+                            $earnings = $a->total_return;
+                            $returns = $a->total_return_percent;
+                        }
                     }
                     else
                     {

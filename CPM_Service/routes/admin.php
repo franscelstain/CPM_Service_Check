@@ -156,7 +156,6 @@ $router->group(['prefix' => 'asset'], function () use ($router) {
         __router($router, 'SA\Assets\Products\Documents', 'document');
         __router($router, 'SA\Assets\Products\Dividen', 'dividen');
         __router($router, 'SA\Assets\Products\Issuer', 'issuer');
-        __router($router, 'SA\Assets\Products\Price', 'price');
         __router($router, 'SA\Assets\Products\Score', 'score');
         __router($router, 'SA\Assets\Products\ThirdParty', 'thirdparty');
         __router($router, 'SA\Assets\Products\ThirdPartyCategory', 'thirdparty-category');
@@ -169,8 +168,6 @@ $router->group(['prefix' => 'asset'], function () use ($router) {
         $router->post('document/category_detail', 'SA\Assets\Products\DocumentsController@category_detail');
         $router->post('field', 'SA\Assets\Products\FeeController@field');
         $router->post('issuer/ws-data', 'SA\Assets\Products\IssuerController@ws_data');
-        $router->post('price/import', 'SA\Assets\Products\PriceController@import');
-        $router->post('price/ws-data', 'SA\Assets\Products\PriceController@ws_data');
         $router->post('thirdparty/ws-data', 'SA\Assets\Products\ThirdPartyController@ws_data');
         $router->post('ws-data', 'SA\Assets\Products\ProductsController@ws_data');
         $router->get('bond', 'SA\Assets\Products\ProductBondController@index'); //add bond here
@@ -181,6 +178,16 @@ $router->group(['prefix' => 'asset'], function () use ($router) {
             $router->delete('save/{id}', 'SA\Assets\Products\CouponController@deleteData');
             $router->put('/save/{id}', 'SA\Assets\Products\CouponController@saveData');
             $router->get('{id}', 'SA\Assets\Products\CouponController@detailData');
+        });
+        $router->group(['prefix' => 'price'], function () use ($router) {        
+            $router->get('detail/{id}', 'SA\Assets\Products\PriceController@detail');    
+            $router->post('import', 'SA\Assets\Products\PriceController@import');
+            $router->post('list', 'SA\Assets\Products\PriceController@listData');
+            $router->delete('save/{id}', 'SA\Assets\Products\PriceController@save');
+            $router->put('save/{id}', 'SA\Assets\Products\PriceController@save');
+            $router->post('save', 'SA\Assets\Products\PriceController@save');
+            $router->post('ws-data', 'SA\Assets\Products\PriceController@ws_data');
+            $router->get('/', 'SA\Assets\Products\PriceController@index');
         });
     });
     __router($router, 'SA\Assets\Products\Products', 'products');
@@ -341,30 +348,38 @@ $router->group(['prefix' => 'users'], function () use ($router) {
     $router->get('auth/admin', 'Auth\AdminController@user_auth');
     $router->get('category-users', 'Users\CategoriesController@getcategory');
     $router->put('change-photo', 'Users\UsersController@change_photo');
-    $router->get('investor/detail_edit/{id}', 'Users\InvestorController@detail_edit');
-    $router->get('investors/detail/{id}', 'Users\InvestorController@detail');
-    $router->get('investors/detail_edit/{id}', 'Users\InvestorController@detail_edit');
-    $router->get('investors', 'Users\InvestorController@index');
+    
+    $router->group(['prefix' => 'investors'], function () use ($router) {
+        $router->get('detail/{id}', 'Users\InvestorController@detail');
+        $router->get('detail_edit/{id}', 'Users\InvestorController@detail_edit');
+        $router->put('save/{id}', 'Users\InvestorController@save');
+        $router->get('/', 'Users\InvestorController@index');
+    });
+
     $router->group(['prefix' => 'investor'], function () use ($router) {
         $router->post('get-data', 'Users\InvestorsController@listInvestor');
         $router->get('data/{id}', 'Users\InvestorsController@detailInvestor');
         $router->get('detail/{id}', 'Users\InvestorController@detail');
+        $router->get('detail_edit/{id}', 'Users\InvestorController@detail_edit');
+        $router->post('list-goals', 'Users\InvestorsController@listWithGoalsForSales');
         $router->put('save/{id}', 'Users\InvestorController@save');
         __router($router, 'Users\Investor\Categories', 'category');
         $router->get('address/{id}', 'Users\InvestorController@address');
+        $router->get('bankaccount/{id}', 'Users\InvestorController@bankAccountInvestor');
         $router->get('bank-account/{id}', 'Users\InvestorController@bank_account');
         $router->get('card', 'Users\InvestorController@card');
         $router->get('edd/{id}', 'Users\InvestorController@edd');
         $router->get('risk-profile/{id}', 'Users\InvestorController@risk_profile');
         $router->group(['prefix' => 'priority-card'], function () use ($router) {
             $router->post('import', 'Users\Investor\CardPrioritiesController@import');
+            $router->post('list', 'Users\InvestorsController@listPriorityCard');
             $router->get('{id}', 'Users\Investor\CardPrioritiesController@detail');
             $router->get('/', 'Users\Investor\CardPrioritiesController@index');
         });
         $router->get('/', 'Users\InvestorController@index');
     });
     $router->group(['prefix' => 'sales'], function () use ($router) {
-        $router->get('branch/{id}', 'Users\SalesController@branch');
+        $router->get('branch/{salesid}', 'Users\SalesController@branch');
         $router->post('ws-data', 'Users\SalesController@ws_data');
         $router->get('total', 'Users\InvestorController@totalsales');
         $router->get('detail/sub/{id}', 'Users\SalesController@detail_sub');

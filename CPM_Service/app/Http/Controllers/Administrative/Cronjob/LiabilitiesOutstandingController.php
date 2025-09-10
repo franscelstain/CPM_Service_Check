@@ -21,7 +21,8 @@ class LiabilitiesOutstandingController extends AppController
         {
             ini_set('max_execution_time', 14400); 
             $liabilities    = [];
-            $investor       = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes']])->get();
+            // $investor       = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes']])->get();            
+            $investor       = Investor::where('is_active', 'Yes')->get();
             foreach ($investor as $inv)
             {
                 $api = $this->api_ws(['sn' => 'InvestorLiabilities', 'val' => [$inv->cif]])->original['data'];

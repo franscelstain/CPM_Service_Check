@@ -3,11 +3,14 @@
 namespace App\Http\Controllers\Financial\Condition;
 
 use App\Http\Controllers\AppController;
+use App\Interfaces\Finance\FinancialRepositoryInterface;
+use App\Interfaces\Users\InvestorRepositoryInterface;
 use App\Models\Financial\AssetOutstanding;
 use App\Models\Financial\Condition\AssetLiability;
 use App\Models\Financial\LiabilityOutstanding;
 use App\Models\Financial\Condition\IncomeExpense;
 use App\Models\Users\Investor\Investor;
+use App\Services\Handlers\Finance\FinancialRatioService;
 use App\Traits\Financial\Condition\FinancialRatio;
 use Illuminate\Http\Request;
 use Auth;
@@ -18,6 +21,19 @@ class AssetsLiabilitiesController extends AppController
     use FinancialRatio;
     
     public $table = 'Financial\Condition\AssetLiability';
+    protected $financialRepository;
+    protected $investorRepository;
+    protected $ratioService;
+
+    public function __construct(
+        FinancialRepositoryInterface $financialRepository, 
+        InvestorRepositoryInterface $investorRepository,
+        FinancialRatioService $ratioService
+    ){
+        $this->financialRepository = $financialRepository;
+        $this->investorRepository = $investorRepository;
+        $this->ratioService = $ratioService;
+    }
 
     public function index(Request $request)
     {
@@ -26,16 +42,40 @@ class AssetsLiabilitiesController extends AppController
 	
 	private function assets_outstanding($type, $inv_id, $select='', $where=[])
 	{
-		$select = !empty($select) ? $select : "outstanding_id, concat(product_name, ' - ', account_no) as outstanding_name, balance_amount as amount, t_assets_outstanding.updated_at, m_financials.financial_name, m_financials.financial_id, cast('1' as integer) as t";
-		$qry  = AssetOutstanding::selectRaw($select)
-                ->join('m_products as b', 't_assets_outstanding.product_id', '=', 'b.product_id')
-                ->join('m_asset_class as c', 'b.asset_class_id', '=', 'c.asset_class_id')
-                ->join('m_financials_assets as d', 'c.asset_class_id', '=', 'd.asset_class_id')
-                ->join('m_financials', 'd.financial_id', '=', 'm_financials.financial_id')
-                ->where([['t_assets_outstanding.investor_id', $inv_id], ['t_assets_outstanding.is_active', 'Yes'], ['b.is_active', 'Yes']])
-                ->where([['c.is_active', 'Yes'], ['d.is_active', 'Yes'], ['m_financials.is_active', 'Yes'], ['m_financials.financial_type', $type]])
-                ->where(array_merge([['t_assets_outstanding.outstanding_date', $this->app_date()]], $where))
-                ->where('t_assets_outstanding.balance_amount', '>=', 1);
+		$select = !empty($select) ? 
+            $select : 
+            "tao.outstanding_id, 
+              concat(mp.product_name, ' - ', tao.account_no) as outstanding_name, 
+              tao.balance_amount as amount, 
+              tao.updated_at, 
+              mf.financial_name, 
+              mf.financial_id, 
+              cast('1' as integer) as t";
+		
+        $qry = DB::table(DB::raw("(
+                    SELECT 
+                        tao.*, 
+                        ROW_NUMBER() OVER (
+                            PARTITION BY tao.product_id, tao.account_no 
+                            ORDER BY tao.data_date DESC, tao.outstanding_id DESC
+                        ) AS rank
+                    FROM t_assets_outstanding tao
+                    WHERE tao.investor_id = {$inv_id}
+                        AND tao.is_active = 'Yes'
+                        AND tao.outstanding_date = '{$this->app_date()}'
+                ) AS tao"))
+                ->join('m_products as mp', 'tao.product_id', '=', 'mp.product_id')
+                ->join('m_asset_class as mac', 'mp.asset_class_id', '=', 'mac.asset_class_id')
+                ->join('m_financials_assets as mfa', 'mac.asset_class_id', '=', 'mfa.asset_class_id')
+                ->join('m_financials as mf', 'mfa.financial_id', '=', 'mf.financial_id')
+                ->where('mp.is_active', 'Yes')
+                ->where('mac.is_active', 'Yes')
+                ->where('mfa.is_active', 'Yes')
+                ->where('mf.is_active', 'Yes')
+                ->where(array_merge([['mf.financial_type', $type]], $where))
+                ->where('tao.rank', 1)
+                ->selectRaw($select);
+
 		return $qry;
 	}
 
@@ -50,10 +90,11 @@ class AssetsLiabilitiesController extends AppController
         {
             $type	= ucwords(strtolower($request->type));
 			$data	= [];
-			$fin	= $this->fin_qry($type, $inv_id);
-			$qry    = $fin->qry->selectRaw("transaction_id, transaction_name, amount, t_assets_liabilities.updated_at, m_financials.financial_name, m_financials.financial_id, cast('0' as integer) as t")
+			$fin	= $this->fin_qry($type, $inv_id);    
+			$qry    = $fin->qry->selectRaw("transaction_id, transaction_name, amount, t_assets_liabilities.updated_at, mf.financial_name, mf.financial_id, cast('0' as integer) as t")
 					->union($fin->union)
-					->get();
+                    ->distinct()->get();
+            // return $qry;
 			$upd_at	= '';
             foreach ($qry as $q)
             {
@@ -176,106 +217,52 @@ class AssetsLiabilitiesController extends AppController
         }
     }
 
-    public function financial_score_data(Request $request)
+    public function financial_score_data_old(Request $request)
     {
         try
         {
-            $order      = $request->order;
-            $colIdx     = !empty($order[0]['column']) ? $order[0]['column'] : '';
-            $colSort    = $request->sort ?? 'asc';
-            $colName    = !empty($request->columns[$colIdx]) ? $request->columns[$colIdx]['data'] : 'fullname';
+            $userId = $this->auth_user()->id;
+            $total  = $this->investorRepository->countInvestorsBySales($userId);
+            
+            if ($total === 0) {
+                return $this->app_response('Financial Score', [
+                    'draw' => $request->draw ?? 1,
+                    'recordsTotal' => 0,
+                    'recordsFiltered' => 0,
+                    'data' => []
+                ]);
+            }
+
+            $search     = $request->search['value'] ?? '';
             $start      = $request->start ?? 0;
-            $length     = $request->length ?? 1;
-            $search     = !empty($request->search) ? $request->search['value'] : '';
-            $items      = [];            
-            $query      = DB::table('u_investors')->where([['sales_id', $this->auth_user()->id], ['is_active', 'Yes']]);
-            $total      = $query->count();
+            $length     = $request->length ?? 10;
+            $colName    = $request->columns[$request->order[0]['column']]['data'] ?? 'fullname';
+            $colSort    = $request->order[0]['dir'] ?? 'asc';
 
-            if (!empty($search))
-            {
-                $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
-                $query->where(function($qry) use ($search, $like) {
-                    $qry->where('fullname', $like, '%'. $search .'%')
-                        ->orWhere('cif', $like, '%'. $search .'%');
-                });
-                $totFiltered = $query->count();
-            }
-            else
-            {
-                $totalFiltered = $total;
-            }
+            $investors = $this->investorRepository->getInvestorsBySalesWithPagination($userId, $search, $start, $length, $colName, $colSort);
+            $totalFiltered = !empty($search) ? count($investors) : $total;
 
-            if (!empty($colName))
-                $query->orderBy($colName, $colSort);
+            $investorIds = $investors->pluck('investor_id')->toArray();
+
+            $incomeData             = $this->financialRepository->getIncomeByInvestorId($investorIds);
+            $expenseData            = $this->financialRepository->getExpenseByInvestorId($investorIds);
+            $assetsData             = $this->financialRepository->getAssetsByInvestorId($investorIds);
+            $assetsAmountData       = $this->financialRepository->getAssetsAmountByInvestorId($investorIds);
+            $liabilitiesData        = $this->financialRepository->getLiabilitiesByInvestorId($investorIds);
+            $liabilitiesAmountData  = $this->financialRepository->getLiabilitiesAmountByInvestorId($investorIds);            
             
-            $investors = $query->skip($start)->take($length)->get();
-
-            $investorId = $investors->pluck('investor_id');
-
-            $income = DB::table('t_income_expense as tie')
-                ->join('m_financials as mf', 'mf.financial_id', 'tie.financial_id')
-                ->where([['mf.financial_type', 'Income'], ['tie.is_active', 'Yes'], ['mf.is_active', 'Yes']])
-                ->whereIn('tie.investor_id', $investorId)
-                ->select('tie.investor_id', DB::raw("SUM(CASE WHEN tie.period_of_time = 'Yearly' THEN tie.amount ELSE tie.amount * 12 END) as total"))
-                ->groupBy('tie.investor_id')
-                ->get();
-
-            $expense = DB::table('t_income_expense as tie')
-                ->join('m_financials as mf', 'mf.financial_id', 'tie.financial_id')
-                ->where([['mf.financial_type', 'Expense'], ['tie.is_active', 'Yes'], ['mf.is_active', 'Yes']])
-                ->whereIn('tie.investor_id', $investorId)
-                ->select('tie.investor_id', DB::raw("SUM(CASE WHEN tie.period_of_time = 'Yearly' THEN tie.amount ELSE tie.amount * 12 END) as total"))
-                ->groupBy('tie.investor_id')
-                ->get();
-
-            $assets = DB::table('t_assets_liabilities as tal')
-                    ->join('m_financials as mf', 'mf.financial_id', 'tal.financial_id')
-                    ->whereIn('tal.investor_id', $investorId)
-                    ->where([['mf.financial_type', 'Assets'], ['tal.is_active', 'Yes'], ['mf.is_active', 'Yes']])
-                    ->where('tal.amount', '>=', 1)
-                    ->select('tal.investor_id', DB::raw("SUM(tal.amount) as total"))
-                    ->groupBy('tal.investor_id')
-                    ->get();
-
-            $assetsAmount = DB::table('t_assets_outstanding as tao')
-                ->join('m_products as mp', 'mp.product_id', 'tao.product_id')
-                ->join('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
-                ->join('m_financials_assets as mfa', 'mfa.asset_class_id', 'mac.asset_class_id')
-                ->join('m_financials as mf', 'mf.financial_id', 'mfa.financial_id')
-                ->whereIn('tao.investor_id', $investorId)
-                ->where([['tao.is_active', 'Yes'], ['mp.is_active', 'Yes'], ['mac.is_active', 'Yes'], 
-                        ['mfa.is_active', 'Yes'], ['mf.is_active', 'Yes'], ['mf.financial_type', 'Assets'],
-                        ['tao.outstanding_date', DB::raw('CURRENT_DATE')], ['tao.balance_amount', '>=', 1]])
-                ->select('tao.investor_id', DB::raw("SUM(tao.balance_amount) as total"))
-                ->groupBy('tao.investor_id');
-
-            $liabilities = DB::table('t_assets_liabilities as tal')
-                    ->join('m_financials as mf', 'mf.financial_id', 'tal.financial_id')
-                    ->whereIn('tal.investor_id', $investorId)
-                    ->where([['mf.financial_type', 'Liabilities'], ['tal.is_active', 'Yes'], ['mf.is_active', 'Yes']])
-                    ->where('tal.amount', '>=', 1)
-                    ->select('tal.investor_id', DB::raw("SUM(tal.amount) as total"))
-                    ->groupBy('tal.investor_id')
-                    ->get();
-            
-            $liabilitiesAmount = DB::table('t_liabilities_outstanding')
-                    ->whereIn('investor_id', $investorId)
-                    ->where([['is_active', 'Yes'], ['outstanding_date', DB::raw('CURRENT_DATE')]])
-                    ->select('investor_id', DB::raw("SUM(outstanding_balance) as total"))
-                    ->groupBy('investor_id');
-
-            $items = $investors->map(function ($investor) use ($income, $expense, $assets, $assetsAmount, $liabilities, $liabilitiesAmount) {
-                $incomeValue            = optional($income->where('investor_id', $investor->investor_id)->first())->total ?? 0;
-                $expenseValue           = optional($expense->where('investor_id', $investor->investor_id)->first())->total ?? 0;
+            $items = $investors->map(function ($investor) use ($incomeData, $expenseData, $assetsData, $assetsAmountData, $liabilitiesData, $liabilitiesAmountData) {
+                $incomeValue            = optional($incomeData->where('investor_id', $investor->investor_id)->first())->total ?? 0;
+                $expenseValue           = optional($expenseData->where('investor_id', $investor->investor_id)->first())->total ?? 0;
                 $cashflow               = $incomeValue - $expenseValue;
                 $incomeExpense          = (object) ['income' => $incomeValue, 'expense' => $expenseValue, 'cashflow' => $cashflow];
-                    
-                $assetValue             = optional($assets->where('investor_id', $investor->investor_id)->first())->total ?? 0;
-                $assetAmountValue       = optional($assetsAmount->where('investor_id', $investor->investor_id)->first())->total ?? 0;
+
+                $assetValue             = optional($assetsData->where('investor_id', $investor->investor_id)->first())->total ?? 0;
+                $assetAmountValue       = optional($assetsAmountData->where('investor_id', $investor->investor_id)->first())->total ?? 0;
                 $assetTotal             = $assetValue + $assetAmountValue;
                     
-                $liabilityValue         = optional($liabilities->where('investor_id', $investor->investor_id)->first())->total ?? 0;
-                $liabilityAmountValue   = optional($liabilitiesAmount->where('investor_id', $investor->investor_id)->first())->total ?? 0;
+                $liabilityValue         = optional($liabilitiesData->where('investor_id', $investor->investor_id)->first())->total ?? 0;
+                $liabilityAmountValue   = optional($liabilitiesAmountData->where('investor_id', $investor->investor_id)->first())->total ?? 0;
                 $liabilityTotal         = $liabilityValue + $liabilityAmountValue;
                     
                 $networth               = $assetTotal - $liabilityTotal;
@@ -292,15 +279,77 @@ class AssetsLiabilitiesController extends AppController
                 ];
             });
             
-            return [
+            return $this->app_response('Financial Score', [
                 'draw' => $request->draw ?? 1,
                 'recordsTotal' => $total,
                 'recordsFiltered' => $totalFiltered,            
                 'data' => $items
-            ];
+            ]);
         }
         catch (\Exception $e)
         {
+            return $this->app_catch($e);
+        }
+    }
+
+    public function financial_score_data(Request $request)
+    {
+        try {
+            $userId = $this->auth_user()->id;
+            $total  = $this->investorRepository->countInvestorsBySales($userId);
+
+            if ($total === 0) {
+                return $this->app_response('Financial Score', [
+                    'draw' => $request->draw ?? 1,
+                    'recordsTotal' => 0,
+                    'recordsFiltered' => 0,
+                    'data' => []
+                ]);
+            }
+
+            $search     = $request->search['value'] ?? '';
+            $start      = $request->start ?? 0;
+            $length     = $request->length ?? 10;
+            $colName    = $request->columns[$request->order[0]['column']]['data'] ?? 'fullname';
+            $colSort    = $request->order[0]['dir'] ?? 'asc';
+
+            $investors = $this->investorRepository->getInvestorsBySalesWithPagination($userId, $search, $start, $length, $colName, $colSort);
+            $totalFiltered = !empty($search) ? count($investors) : $total;
+
+            $investorIds = $investors->pluck('investor_id')->toArray();
+            $summaryData = $this->financialRepository->getFinancialSummary($investorIds)->keyBy('investor_id');
+
+            $items = $investors->map(function ($investor) use ($summaryData) {
+                $summary = $summaryData[$investor->investor_id] ?? null;
+                $data = [
+                    'income' => $summary->income ?? 0,
+                    'expense' => $summary->expense ?? 0,
+                    'assets' => $summary->assets ?? 0,
+                    'liabilities' => $summary->liabilities ?? 0,
+                ];
+
+                $networth = ($summary->assets ?? 0) - ($summary->liabilities ?? 0);
+                $cashflow = ($summary->income ?? 0) + ($summary->expense ?? 0);
+                $ratio = $this->ratioService->calculateFinancialScore($data, $investor);
+
+                return [
+                    'investor_id'   => $investor->investor_id,
+                    'cif'           => $investor->cif,
+                    'fullname'      => $investor->fullname,
+                    'photo_profile' => $investor->photo_profile,
+                    'cashflow'      => $cashflow,
+                    'networth'      => $networth,
+                    'ratio'         => $ratio
+                ];
+            });
+
+            return $this->app_response('Financial Score', [
+                'draw' => $request->draw ?? 1,
+                'recordsTotal' => $total,
+                'recordsFiltered' => $totalFiltered,
+                'data' => $items
+            ]);
+        } catch (\Exception $e) {
             return $this->app_catch($e);
         }
     }
@@ -371,16 +420,57 @@ class AssetsLiabilitiesController extends AppController
         return $total;
     }
 
-	private function liability_outstanding($inv_id, $select='')
+	// private function liability_outstanding($inv_id, $select='')
+	// {
+	// 	$select	= !empty($select) ? $select : "liabilities_outstanding_id, account_id, outstanding_balance, updated_at, liabilities_name, cast('0' as integer) as fin_id, cast('1' as integer) as t";
+	// 	$qry	= LiabilityOutstanding::selectRaw($select)
+	// 			->where([['investor_id', $inv_id],['is_active', 'Yes'], ['outstanding_date', $this->app_date()]]);
+	// 	return $qry;
+	// }
+    private function liability_outstanding($inv_id, $select='')
 	{
-		$select	= !empty($select) ? $select : "liabilities_outstanding_id, account_id, outstanding_balance, updated_at, liabilities_name, cast('0' as integer) as fin_id, cast('1' as integer) as t";
-		$qry	= LiabilityOutstanding::selectRaw($select)
-				->where([['investor_id', $inv_id],['is_active', 'Yes'], ['outstanding_date', $this->app_date()]]);
-		return $qry;
+        $select	= !empty($select) ? $select : "liabilities_outstanding_id, account_id, outstanding_balance, updated_at, liabilities_name, cast('0' as integer) as fin_id, cast('1' as integer) as t";
+        $subQuery = DB::table('t_liabilities_outstanding as tlo')
+            ->select(
+                'tlo.investor_id',
+                'tlo.liabilities_id', 
+                'tlo.account_id', 
+                DB::raw('MAX(tlo.data_date) as latest_data_date')
+            )
+            ->where([
+                ['tlo.investor_id', $inv_id],
+                ['tlo.is_active', 'Yes'],
+                ['tlo.outstanding_date', $this->app_date()],
+            ])
+            ->groupBy('tlo.investor_id', 'tlo.account_id', 'tlo.liabilities_id');
+        $qry = DB::table(DB::raw("(
+                    SELECT 
+                        tlo.*, 
+                        ROW_NUMBER() OVER (
+                            PARTITION BY tlo.investor_id, tlo.liabilities_id, tlo.account_id 
+                            ORDER BY tlo.data_date DESC, tlo.liabilities_outstanding_id DESC
+                        ) AS rank
+                    FROM 
+                        t_liabilities_outstanding tlo
+                    INNER JOIN (" . $subQuery->toSql() . ") AS latest_data
+                        ON tlo.investor_id = latest_data.investor_id
+                        AND tlo.liabilities_id = latest_data.liabilities_id
+                        AND tlo.account_id = latest_data.account_id
+                        AND (tlo.data_date = latest_data.latest_data_date OR latest_data.latest_data_date IS NULL)
+                    WHERE 
+                        tlo.investor_id = " . $inv_id . "
+                        AND tlo.is_active = 'Yes'
+                        AND tlo.outstanding_date = CURRENT_DATE
+                ) AS tlo"))
+                ->mergeBindings($subQuery)
+                ->where('tlo.rank', 1)
+                ->selectRaw($select);
+        return $qry;
 	}
 
     public function list_for_sales(Request $request)
     {
+
         return $this->findata($request, $request->investor_id);
     }
 

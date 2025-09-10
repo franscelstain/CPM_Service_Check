@@ -5,14 +5,48 @@ namespace App\Http\Controllers\Administrative\Cronjob;
 use App\Http\Controllers\AppController;
 use App\Models\Transaction\StagingAsset;
 use App\Models\Users\Investor\Investor;
+use App\Services\Handlers\Finance\SukukMiddlewareService;
 use Illuminate\Http\Request;
+use DB;
 
 class SukukMiddlewareController extends AppController
 {
+    protected $sukukService;
+
+    public function __construct(SukukMiddlewareService $sukukService)
+    {
+        $this->sukukService = $sukukService;
+    }
+
     /**
      * @return void
      */
     public function getData(Request $request)
+    {
+        ini_set('max_execution_time', 14400);
+        
+        $offset = (int) $request->get('offset', 0);
+        $exhaust = $request->boolean('exhaust', false);
+
+        try {
+            $result = $this->sukukService->processRange($offset, $exhaust);
+            return response()->json([
+                'success' => true,
+                'offset' => $offset,
+                'exhaust' => $exhaust,
+                'processed' => count($result),
+                'investors_with_data' => array_keys($result),
+            ]);
+        } catch (\Throwable $e) {
+            \Log::error("[SukukMiddleware] Error: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function getDataOld(Request $request)
     {
         try
         {

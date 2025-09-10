@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Models\Investor\Financial\Planning\Goal;
+namespace App\Models\Investor\Financial\Plannig\Goal;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Validation\Rule;

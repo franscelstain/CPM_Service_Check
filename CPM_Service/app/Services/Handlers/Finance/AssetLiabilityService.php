@@ -23,8 +23,8 @@ class AssetLiabilityService
         $asset = $this->assetRepo->totalAsset($investorId, $endDate);
         $liability = $this->liabilityRepo->totalLiability($investorId, $endDate);
 
-        $totalAsset = $asset ?? 0;
-        $totalLiability = $liability ?? 0;
+        $totalAsset = (float) ($asset ?? 0);
+        $totalLiability = (float) ($liability ?? 0);
 
         return [
             'asset' => $totalAsset,

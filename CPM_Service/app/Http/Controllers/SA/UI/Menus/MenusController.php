@@ -6,6 +6,7 @@ use App\Http\Controllers\AppController;
 use App\Models\SA\UI\Menus\Menu;
 use App\Models\Users\Category;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class MenusController extends AppController
 {
@@ -49,17 +50,20 @@ class MenusController extends AppController
     {
         try 
         {
-            $filter = empty($id) ? [['usercategory_id', $request->category], ['slug', $request->slug]] : ['menu_id' => $id];
-            $menu   = Menu::where('is_active', 'Yes')->where($filter)->first();
-            if (!empty($menu->menu_id))
+            if (!empty($id) || (!empty($request->category) && !empty($request->slug)))
             {
-                $mn_id  = empty($id) ? $menu->menu_id : $mn_id;
-                $mn_nm  = empty($id) ? $menu->menu_name : $mn_nm;
-                $mn_btn = empty($id) ? $menu->button : $mn_btn;
-                $bc     = array_merge([$menu->menu_name => $menu->slug], $bc);
-                if (!empty($menu->parent_id))
+                $filter = empty($id) ? [['usercategory_id', $request->category], ['slug', $request->slug]] : ['menu_id' => $id];
+                $menu   = Menu::where('is_active', 'Yes')->where($filter)->first();
+                if (!empty($menu->menu_id))
                 {
-                    return $this->breadcrumbs($request, $menu->parent_id, $mn_id, $mn_nm, $mn_btn, $bc);
+                    $mn_id  = empty($id) ? $menu->menu_id : $mn_id;
+                    $mn_nm  = empty($id) ? $menu->menu_name : $mn_nm;
+                    $mn_btn = empty($id) ? $menu->button : $mn_btn;
+                    $bc     = array_merge([$menu->menu_name => $menu->slug], $bc);
+                    if (!empty($menu->parent_id))
+                    {
+                        return $this->breadcrumbs($request, $menu->parent_id, $mn_id, $mn_nm, $mn_btn, $bc);
+                    }
                 }
             }
             return $this->app_response('Breadcrumbs', ['id' => $mn_id, 'name' => $mn_nm, 'bc' => $bc, 'button' => $mn_btn]);
@@ -200,23 +204,37 @@ class MenusController extends AppController
 			}
 		}
     }
-    
+
     public function user($id='', $bc=[])
     {
         try
         {
-            $menu   = $usrtyp = $type = [];
-            $user   = $this->auth_user()->usercategory_id;
-            $data   = Menu::select('m_menus.*', 'b.group_name')
-                    ->leftJoin('m_menus_groups as b', function ($join) { 
-                        $join->on('m_menus.group_id', '=', 'b.group_id')->where('b.is_active', 'Yes'); 
-                    })->where([['m_menus.is_active', 'Yes'], ['m_menus.published', true]]);
-            $data   = $this->auth_user()->usercategory_name != 'Super Admin' ? $data->where('m_menus.usercategory_id', $user) : $data;
-            $data   = !empty($id) ? $data->where('m_menus.parent_id', $id) : $data->whereNull('m_menus.parent_id');
-            $data   = $data->orderBy('m_menus.parent_id')->orderBy('b.sequence_to')->orderBy('m_menus.sequence_to');
-            if ($data->count() > 0)
-            {
-                foreach ($data->get() as $dt)
+            $category = $this->auth_user()->usercategory_name;
+            $cacheKey = "user_menu_{$category}_{$id}_".implode('_', $bc);
+            return Cache::remember($cacheKey, 60, function() use ($category, $id, $bc) {
+                $menu   = $usrtyp = $type = [];
+                $user   = $this->auth_user()->usercategory_id;
+
+                $data   = Menu::select('m_menus.*', 'b.group_name', 'b.sequence_to as group_sequence_to')
+                            ->leftJoin('m_menus_groups as b', function ($join) { 
+                                $join->on('m_menus.group_id', '=', 'b.group_id')->where('b.is_active', 'Yes'); 
+                            })
+                            ->where([
+                                ['m_menus.is_active', 'Yes'],
+                                ['m_menus.published', true]
+                            ]);
+
+                if ($category !== 'Super Admin') {
+                    $data = $data->where('m_menus.usercategory_id', $user);
+                }
+
+                $data = !empty($id) ? $data->where('m_menus.parent_id', $id) : $data->whereNull('m_menus.parent_id');
+                $data = $data->orderBy('m_menus.parent_id')
+                            ->orderBy('b.sequence_to')
+                            ->orderBy('m_menus.sequence_to')
+                            ->get();
+
+                foreach ($data as $dt)
                 {
                     $arrBc  = array_merge($bc, [$dt->menu_name => $dt->slug]);
                     $child  = $this->user($dt->menu_id, $arrBc);
@@ -246,17 +264,23 @@ class MenusController extends AppController
 
                     if (empty($id) && !in_array($dt->usercategory_id, $type)) 
                     { 
-                        $find   = Category::where([['usercategory_id', $dt->usercategory_id], ['is_active', 'Yes']])->first();
+                        $find   = Category::where([
+                            ['usercategory_id', $dt->usercategory_id],
+                            ['is_active', 'Yes']
+                        ])->first();
+
                         $type[] = $dt->usercategory_id;
                         if (!empty($find->usercategory_name)) { $usrtyp[$dt->usercategory_id] = $find->usercategory_name; }
                     }
                 }
-            }
-            return !empty($id) ? $menu : $this->app_response('User Menu', ['menu' => $menu, 'user_type' => $usrtyp, 'user' => $user]);
+
+                return !empty($id) ? $menu : $this->app_response('User Menu', ['menu' => $menu, 'user_type' => $usrtyp, 'user' => $user]);
+            });
         }
         catch (\Exception $e)
         {
             return $this->app_catch($e);
         }
     }
+
 }

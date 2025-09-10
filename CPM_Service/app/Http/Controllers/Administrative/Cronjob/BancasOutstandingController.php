@@ -20,7 +20,8 @@ class BancasOutstandingController extends AppController
             ini_set('max_execution_time', '14400');
             $asset      = [];
             $success    = $fails = 0;
-            $investor   = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes']])->get();
+            // $investor   = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes']])->get();
+            $investor   = Investor::where('is_active', 'Yes')->get();
             
 	        foreach ($investor as $inv)
             {

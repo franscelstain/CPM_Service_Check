@@ -16,7 +16,7 @@ class Category extends Model
 		return [
 			'usercategory_name' => ['required', Rule::unique('u_users_categories')->ignore($id, 'usercategory_id')->where(function ($query) {
                 return $query->where('is_active', 'Yes');
-            })],
+            }), 'max:25'],
             'description' => 'required|min:1|max:225'
 		];
 	}

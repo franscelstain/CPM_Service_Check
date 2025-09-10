@@ -82,10 +82,20 @@ class InvestorController extends AppController
                 $ws = Investor::where([['is_active', 'Yes'], ['identity_no', $idNo]])->first();
                 if (!empty($ws)) {
                     $msg = '';
-                    $inv = Investor::where('is_active', 'Yes')->where(function ($qry) use ($request) {
-                        return empty($request->email) ? $qry->where([[DB::raw('LOWER(identity_no)'), $request->identity_no], ['valid_account', 'Yes']])->orWhere([[DB::raw('LOWER(identity_no)'), $request->identity_no], [DB::raw('LENGTH(email)'), '>', 3]]) :
-                            $qry->where([[DB::raw('LOWER(identity_no)'), $request->identity_no], ['valid_account', 'Yes']])->orWhere(DB::raw('LOWER(email)'), $request->email);
-                    })->first();
+                    $inv = Investor::where('is_active', 'Yes')                            
+                            ->where('valid_account', 'Yes')
+                            ->where(function ($qry) use ($request) {
+                                if (empty($request->email)) {
+                                    $qry->where(DB::raw('LOWER(identity_no)'), $request->identity_no)
+                                        ->where(DB::raw('LENGTH(email)'), '>', 3);
+                                } else {
+                                    $qry->where(function ($qry2) use ($request) {
+                                            $qry2->where(DB::raw('LOWER(identity_no)'), $request->identity_no)
+                                                ->where(DB::raw('LENGTH(email)'), '>', 3);
+                                        })                                        
+                                        ->orWhere(DB::raw('LOWER(email)'), $request->email);
+                                }
+                            })->first();
                     if (!empty($inv->investor_id)) {
                         $msg = 'registered';
                         if (($idNo && $inv->identity_no == $idNo) && ($email && $inv->email == $email)) {
@@ -159,19 +169,29 @@ class InvestorController extends AppController
             $token = $user = '';
             if (!$request->user()) {
                 $status = 'invalid';
+                Log::warning('[Email Verify] Invalid user from request');
             } else {
                 $user = $request->user();
-                if ($request->user()->hasVerifiedEmail()) {
+                $userId = $user->investor_id ?? null;
+
+                Log::info('[Email Verify] Authenticated user', ['user_id' => $userId]);
+
+                if ($request->user()->hasVerifiedEmail() && $user->valid_account == 'Yes') {
                     $status = 'already verified';
+                    Log::info('[Email Verify] Email already verified and account valid', ['user_id' => $userId]);
                 } else {
                     $status = 'verified';
                     $token = $request->input('token');
                     $code = rand(1000, 9999);
 
+                    Log::info('[Email Verify] Marking email as verified', ['user_id' => $userId]);
+
                     $request->user()->markEmailAsVerified();
 
                     if (!empty($request->user()->mobile_phone)) {
                         $request->request->add(['otp' => $code, 'otp_created' => $this->app_date('', 'Y-m-d H:i:s'), 'token' => null]);
+
+                        Log::info('[Email Verify] Generating OTP and preparing SMS', ['user_id' => $userId, 'otp' => $code]);
 
                         //$conf   = Config::where([['config_name', 'OTPMessage'], ['is_active', 'Yes']])->first();
                         //$msg    = !empty($conf->config_value) ? str_replace('{otp_code}', $code, $conf->config_value) : '';
@@ -181,6 +201,8 @@ class InvestorController extends AppController
                         $this->api_ws(['sn' => 'SmsGateway', 'val' => [$request->user()->mobile_phone, $msg]]);
 
                         $this->db_save($request, Auth::id(), ['validate' => true]);
+
+                        Log::info('[Email Verify] OTP data saved', ['user_id' => $userId]);
                     }
                 }
             }
@@ -369,7 +391,15 @@ class InvestorController extends AppController
     {
         try
         {
-            if (!empty($this->app_validate($request, ['email' => 'required|string|email', 'password' => 'required|string|min:1'])))
+            // Fetch all password rules at once
+            $passwordRules = $this->passwdLoginRule([
+                'PasswordLength' => 6, // Default length if not found in DB
+            ]);
+    
+            $passwordLength = $passwordRules['PasswordLength'];
+            $maxAttempts = $passwordRules['PasswordInvalid'] ?? null;
+
+            if (!empty($this->app_validate($request, ['email' => 'required|string|email', 'password' => "required|string|min:{$passwordLength}"])))
             {
                 exit();
             }
@@ -421,46 +451,36 @@ class InvestorController extends AppController
                 if (!empty($ch) && !empty($ch->investor_id))
                 {
                     $last_activity_at = $ch->last_activity_at;
-                    if ($ch->is_enable == 'No')
-                    {
+                    if ($ch->is_enable == 'No') {
                         $err = 'Sorry, your account has been disabled';
-                    }
-                    else
-                    {
-                        $attempCount = 1;
-                        $chAtempt = InvestorPasswordAttemp::where('investor_id', $ch->investor_id)->first();
-                        if (!isset($chAtempt->attempt_count))
-                        {
-                            InvestorPasswordAttemp::where('investor_id', $ch->investor_id)->update(['is_active' => 'No']);
-                            InvestorPasswordAttemp::create([
-                                'investor_id' => $ch->investor_id,
-                                'attempt_count' => $attempCount,
-                                'is_active' => 'Yes',
-                                'created_by' => 'System',
-                                'created_host' => '127.0.0.1',
-                                'created_at' => $this->app_date('', 'Y-m-d H:i:s')
-                            ]);
-                        }
-                        else
-                        {
-                            $attempCount = ($chAtempt->attempt_count + 1);
-                            InvestorPasswordAttemp::where('investor_id', $ch->investor_id)->update(['attempt_count' => $attempCount, 'created_host' => '127.0.0.1']);
-                        }                                 
+                    } else {
+                        if ($maxAttempts) {
+                            $chAtempt = InvestorPasswordAttemp::where('investor_id', $ch->investor_id)->first();
+                            $attempCount = $chAtempt ? $chAtempt->attempt_count + 1 : 1;
+                            if (!isset($chAtempt->attempt_count))
+                            {
+                                InvestorPasswordAttemp::where('investor_id', $ch->investor_id)->update(['is_active' => 'No']);
+                                InvestorPasswordAttemp::create([
+                                    'investor_id' => $ch->investor_id,
+                                    'attempt_count' => $attempCount,
+                                    'is_active' => 'Yes',
+                                    'created_by' => 'System',
+                                    'created_host' => '127.0.0.1',
+                                    'created_at' => $this->app_date('', 'Y-m-d H:i:s')
+                                ]);
+                            }
+                            else
+                            {
+                                InvestorPasswordAttemp::where('investor_id', $ch->investor_id)->update(['attempt_count' => $attempCount, 'created_host' => '127.0.0.1']);
+                            }                                 
 
-                        $generalControllerClass = new GeneralController;
-                        $configPassword = $generalControllerClass->password();
-                        $configPassword = isset($configPassword->original) && isset($configPassword->original['data']) ? $configPassword->original['data'] : [];
-                        $maxPassInvalid = isset($configPassword['PasswordInvalid']) ? $configPassword['PasswordInvalid'] : 0;
-
-                        if ($attempCount >= $maxPassInvalid)
-                        {
-                            $err = 'Sorry, your account password has been block, because '. $maxPassInvalid .' time, wrong password'; 
-                            $preCheckSign = false;   
-                            Investor::where([['email', $request->email], ['is_active', 'Yes']])->update(['is_enable' => 'No']);
-                        }
-                        else
-                        {
-                            $err = 'Sorry, your password wrong, you was '. $attempCount .' time (maximum '. $maxPassInvalid .' attempt)'; 
+                            if ($attempCount >= $maxAttempts) {
+                                $err = 'Sorry, your account password has been block, because '. $maxAttempts .' time, wrong password'; 
+                                $preCheckSign = false;   
+                                Investor::where([['email', $request->email], ['is_active', 'Yes']])->update(['is_enable' => 'No']);
+                            } else {
+                                $err = 'Sorry, your password wrong, you was '. $attempCount .' time (maximum '. $maxAttempts .' attempt)'; 
+                            }
                         }
                     }
                 }
@@ -532,10 +552,20 @@ class InvestorController extends AppController
         }
         catch (\Exception $e)
         {
-            \Log::error('Exception', ['exception' => $e]);
-            return response()->json(['error' => 'gagal'], 500);
             return $this->app_catch($e);
         }
+    }
+
+    public function passwdLoginRule(array $defaults = []): array
+    {
+        $configs = DB::table('c_config')
+            ->where('config_type', 'Password')
+            ->where('is_active', 'Yes')
+            ->pluck('config_value', 'config_name')
+            ->toArray();
+
+        // Merge with defaults to ensure all keys are present
+        return array_merge($defaults, $configs);
     }
 
     public function logout()
@@ -626,34 +656,38 @@ class InvestorController extends AppController
             $investor = $this->investorRepository->findByIdentity($request->identity_no);
 
             if (!empty($investor)) {
-                //check investor priority or pre approve
-                $cards = $this->investorRepository->checkCif($investor->cif);
-                if (empty($cards->investor_card_id) || (!$cards->is_priority && !$cards->pre_approve)) {
-                    return $this->app_response('Registration Failed', [], ['error_code' => 403, 'error_msg' => ['Non-priority or pre-approve investor']]);
-                }
+                if (!empty($investor->cif)) {
+                    //check investor priority or pre approve
+                    $cards = $this->investorRepository->checkCif($investor->cif);
+                    if (empty($cards->investor_card_id) || (!$cards->is_priority && !$cards->pre_approve)) {
+                        return $this->app_response('Non Priority or Pre Approve', [], ['error_code' => 403, 'error_msg' => ['Non-priority or pre-approve investor']]);
+                    }
 
-                $num_inv = $this->investorRepository->findByIdentityAndEmail($request->identity_no, $request->email);
-                if ($num_inv == 0) {
-                    // Persiapkan data yang akan dikirim ke repository
-                    $data = [
-                        'identity_no' => $request->identity_no,
-                        'email' => $request->email,
-                        'password' => $request->password,
-                        'ip' => $request->ip() ?? '::1',
-                    ];
+                    $num_inv = $this->investorRepository->findByIdentityAndEmail($request->identity_no, $request->email);
+                    if ($num_inv == 0) {
+                        // Persiapkan data yang akan dikirim ke repository
+                        $data = [
+                            'identity_no' => $request->identity_no,
+                            'email' => $request->email,
+                            'password' => $request->password,
+                            'ip' => $request->ip() ?? '::1',
+                        ];
 
-                    $this->investorRepository->updateInvestor($investor, $data);
+                        $this->investorRepository->updateInvestor($investor, $data);
 
-                    Auth::attempt($request->only(['email', 'password']));
+                        Auth::attempt($request->only(['email', 'password']));
 
-                    $this->emailRequestVerification($request);
-                    
-                    return $this->app_response('Registration Success', ['id' => Auth::id()]);
+                        $this->emailRequestVerification($request);
+                        
+                        return $this->app_response('Registration Success', ['id' => Auth::id()]);
+                    } else {
+                        return $this->app_response('Already Registered', [], ['error_code' => 409, 'error_msg' => ['Investor already registered']]);
+                    }
                 } else {
-                    return $this->app_response('Registration Failed', [], ['error_code' => 409, 'error_msg' => ['Investor already registered']]);
+                    return $this->app_response('CIF Not Found', [], ['error_code' => 409, 'error_msg' => ['CIF is empty']]);
                 }
             } else {
-                return $this->app_response('Registration Failed', [], ['error_code' => 404, 'error_msg' => ['Identity number not registered']]);
+                return $this->app_response('Not Registered', [], ['error_code' => 404, 'error_msg' => ['Identity number not registered']]);
             }
             
         } catch (\Exception $e) {
@@ -793,7 +827,6 @@ class InvestorController extends AppController
 
     public function valid_account(Request $request)
     {
-
         try {
             $phone = '';
             $status = 'unauthorized';
@@ -888,8 +921,9 @@ class InvestorController extends AppController
                             }
                         }
 
-                        $request->request->add(['valid_account' => 'Yes']);
-                        $this->db_save($request, Auth::id(), $this->form_ele());
+                        // $request->request->add(['valid_account' => 'Yes', 'is_enable' => 'Yes']);
+                        // return $this->db_save($request, Auth::id(), $this->form_ele());
+                        Investor::where('investor_id', Auth::id())->update(['valid_account' => 'Yes', 'is_enable' => 'Yes']);
                     } else {
                         $status = 'success';
                         $msg = 'The OTP Number has expired';

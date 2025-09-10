@@ -4,16 +4,25 @@ namespace App\Http\Controllers\SA\Assets\Products;
 
 use App\Http\Controllers\AppController;
 use App\Imports\SA\Assets\Products\PriceImport;
+use App\Interfaces\Products\PriceRepositoryInterface;
 use App\Models\SA\Assets\AssetClass;
 use App\Models\SA\Assets\Products\Product;
 use App\Models\SA\Assets\Products\Price;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Maatwebsite\Excel\Facades\Excel;
+use Illuminate\Support\Facades\DB;
 use Storage;
 
 class PriceController extends AppController
 {
     public $table = 'SA\Assets\Products\Price';
+    protected $priceRepo;
+
+    public function __construct(PriceRepositoryInterface $priceRepo)
+    {
+        $this->priceRepo = $priceRepo;
+    }
 
     public function index(Request $request)  
     {
@@ -105,8 +114,7 @@ class PriceController extends AppController
     {   
         try
         {
-            // if (!empty($this->app_validate($request, ['file_import' => 'required|max:2048|mimes:xls,xlsx'])))
-	    if (!empty($this->app_validate($request, ['file_import' => 'required|max:2048|mimes:xlsx'])))
+            if (!empty($this->app_validate($request, ['file_import' => 'required|max:2048|mimes:xls,xlsx'])))
             {
                 exit();
             }
@@ -118,10 +126,10 @@ class PriceController extends AppController
             $usrid      = !empty($this->auth_user()) ? $this->auth_user()->id : 0;
             $ip         = !empty($request->input('ip')) ? $request->input('ip') : $request->ip();
             $file       = $request->file('file_import');
+            
             $file->move(storage_path('import'), $file->getClientOriginalName());
-            $excel  = Excel::toArray(new PriceImport, storage_path('import') .'/'. $file->getClientOriginalName());	
-		
-
+            
+            $excel  = Excel::toArray(new PriceImport, storage_path('import') .'/'. $file->getClientOriginalName());
             $no = 1;            
             foreach ($excel[0] as $ex)
             {
@@ -161,6 +169,34 @@ class PriceController extends AppController
         }
     }
 
+    public function listData(Request $request)
+    {
+        try {
+            $filters = [
+                'search' => $request->input('search'),
+                'price_date' => $request->input('price_date'), // Tambahkan filter price_date
+                'price_value' => $request->input('price_value'), // Tambahkan filter price_value
+            ];
+            $limit = $request->input('limit', 10); // Default limit 10
+            $colName = $request->input('colName', 'product_name');
+            $colSort = $request->input('colSort', 'asc');
+            $page = $request->input('page');
+            $price = $this->priceRepo->listData($filters, $limit, $page, $colName, $colSort);
+            $total = !empty($search) ? $this->priceRepo->countProduct() : $price->total();
+    
+            return $this->app_response('Products - Price', [
+                'item' => $price->items(),
+                'current_page' => $price->currentPage(),
+                'last_page' => $price->lastPage(),
+                'per_page' => $price->perPage(),
+                'total' => $total,
+                'total_filtered' => $price->total(), // Adding filtered total
+            ]);    
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
+    }
+
     public function save(Request $request, $id = null)
     {
         return $this->db_save($request, $id);
@@ -174,38 +210,54 @@ class PriceController extends AppController
             
             $data   = [];
             $date   =  date('Y-m-d');
-            // $date =  '2018-07-10';
-            // $last_date = date('Y-m-d', strtotime('-2 days'));
 
-            for ($i = 1; $i <= 15;$i++)
+            for ($i = 1; $i <= 15; $i++)
             {
+                $insert = [];
+                $update = [];
                 $date = date('Y-m-d', strtotime('-'.$i.' days'));
                 $api = $this->api_ws(['sn' => 'MarketPriceMF', 'val' => [$date]])->original['data'];
-                $insert = $update = [];
                 foreach ($api as $a)
                 {
                     $prd = Product::where([['ext_code', $a->productCode], ['is_active', 'Yes']])->first();
                     if (!empty($prd->product_id))
                     {
-                        $qry    = Price::where([['product_id', $prd->product_id], ['price_date', $a->date]])->first();
-                        $id     = !empty($qry->price_id) ? $qry->price_id : null;
-                        $request->request->add([
-                            'product_id'        => $prd->product_id,
-                            'price_date'        => $a->date,
-                            'price_value'       => $a->value,
-                            'is_data'           => !empty($id) ? $qry->is_data : 'WS',
-                            '__update'          => !empty($id) ? 'Yes' : ''
-                        ]);
-                        $this->db_save($request, $id, ['validate' => true]);
+                        $productId  = $prd->product_id;
+                        $priceDate  = $a->date;
+                        $priceValue = $a->value;
 
-                        if (empty($id))
-                            $insert [] = $a;
-                        else
-                            $update [] = $a;
+                        $existingRow = DB::table('m_products_prices')
+                            ->where('product_id', $productId)
+                            ->where('price_date', $priceDate)
+                            ->first();
+
+                        $isExisting = !empty($existingRow);
+
+                        DB::table('m_products_prices')->updateOrInsert(
+                            [
+                                'product_id' => $productId,
+                                'price_date' => $priceDate,
+                            ],
+                            [
+                                'price_value' => $priceValue,
+                                'updated_at'  => Carbon::now(),
+                                'created_at'  => $isExisting ? $existingRow->created_at : Carbon::now(),
+                                'is_active' => 'Yes',
+                                'created_by' => 'system',
+                                'created_host' => 'localhost'
+                            ]
+                        );
+
+                        if ($isExisting) {
+                            $update[] = $a;
+                        } else {
+                            $insert[] = $a;
+                        }
                     }
                    
                 }
-                $data [$i]= [['insert' => $insert],['update' =>$update]];
+
+                $data[$i] = ['insert' => $insert, 'update' => $update];
                  // $date = date('Y-m-d', strtotime('-'.$i.' days'));
 
             }
@@ -223,30 +275,45 @@ class PriceController extends AppController
         try
         {
             ini_set('max_execution_time', '14400');
-            $insert = $update = 0;
-            $data   = [];
+            $insert = [];
+            $update = [];
             $api = $this->api_ws(['sn' => 'MarketPriceMFAll'])->original['data'];
-            // return $this->app_response('xxx', $api);
             foreach ($api as $a)
             {
                 $prd = Product::where([['ext_code', $a->productCode], ['is_active', 'Yes']])->first();
                 if (!empty($prd->product_id))
                 {
-                    $qry    = Price::where([['product_id', $prd->product_id], ['price_date', $a->date]])->first();
-                    $id     = !empty($qry->price_id) ? $qry->price_id : null;
-                    $request->request->add([
-                        'product_id'        => $prd->product_id,
-                        'price_date'        => $a->date,
-                        'price_value'       => $a->value,
-                        'is_data'           => !empty($id) ? $qry->is_data : 'WS',
-                        '__update'          => !empty($id) ? 'Yes' : ''
-                    ]);
-                    $this->db_save($request, $id, ['validate' => true]);
+                    $productId  = $prd->product_id;
+                    $priceDate  = $a->date;
+                    $priceValue = $a->value;
 
-                    if (empty($id))
-                        $insert++;
-                    else
-                        $update++;
+                    $existingRow = DB::table('m_products_prices')
+                        ->where('product_id', $productId)
+                        ->where('price_date', $priceDate)
+                        ->first();
+
+                    $isExisting = !empty($existingRow);
+
+                    DB::table('m_products_prices')->updateOrInsert(
+                        [
+                            'product_id' => $productId,
+                            'price_date' => $priceDate,
+                        ],
+                        [
+                            'price_value' => $priceValue,
+                            'updated_at'  => Carbon::now(),
+                            'created_at'  => $isExisting ? $existingRow->created_at : Carbon::now(),
+                            'is_active' => 'Yes',
+                            'created_by' => 'system',
+                            'created_host' => 'localhost'
+                        ]
+                    );
+
+                    if ($isExisting) {
+                        $update[] = $a;
+                    } else {
+                        $insert[] = $a;
+                    }
                 }
             }
             return $this->app_partials($insert+$update, 0, ['save' => ['insert' => $insert, 'update' => $update]]);
@@ -264,8 +331,9 @@ class PriceController extends AppController
             ini_set('max_execution_time', '14400');
             // $insert = $update = 0;
             $data   = [];
-            $api = $this->api_ws(['sn' => 'MarketPriceMFAll'])->original['data'];
-            $insert = $update = [];
+            $insert = [];
+            $update = [];
+            $api = $this->api_ws(['sn' => 'MarketPriceMFAll'])->original['data'];$insert = $update = [];
 
             foreach ($api as $a)
             {
@@ -275,23 +343,42 @@ class PriceController extends AppController
                 if (!empty($prd->product_id))
                 {
                     $qry    = Price::where([['product_id', $prd->product_id], ['price_date', $a->date]])->first();
-                    $id     = !empty($qry->price_id) ? $qry->price_id : null;
-                    $request->request->add([
-                        'product_id'        => $prd->product_id,
-                        'price_date'        => $a->date,
-                        'price_value'       => $a->value,
-                        'is_data'           => !empty($id) ? $qry->is_data : 'WS',
-                        '__update'          => !empty($id) ? 'Yes' : ''
-                    ]);
-                    $this->db_save($request, $id, ['validate' => true]);
 
-                    if (empty($id))
-                        $insert [] = $a;
-                    else
-                        $update [] = $a;
+                    $productId  = $prd->product_id;
+                    $priceDate  = $a->date;
+                    $priceValue = $a->value;
+
+                    $existingRow = DB::table('m_products_prices')
+                        ->where('product_id', $productId)
+                        ->where('price_date', $priceDate)
+                        ->first();
+
+                    $isExisting = !empty($existingRow);
+                    
+                    DB::table('m_products_prices')->updateOrInsert(
+                        [
+                            'product_id' => $productId,
+                            'price_date' => $priceDate,
+                        ],
+                        [
+                            'price_value' => $priceValue,
+                            'updated_at'  => Carbon::now(),
+                            'created_at'  => $isExisting ? $existingRow->created_at : Carbon::now(),
+                            'is_active' => 'Yes',
+                            'created_by' => 'system',
+                            'created_host' => 'localhost'
+                        ]
+                    );
+
+                    if ($isExisting) {
+                        $update[] = $a;
+                    } else {
+                        $insert[] = $a;
+                    }
                 }
             }
-            $data = [['insert' => $insert],['update' =>$update]];
+
+            $data = ['insert' => $insert, 'update' => $update];
             return $this->app_response('data', $data);
         }
         catch (\Exception $e)

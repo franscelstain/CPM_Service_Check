@@ -253,27 +253,63 @@ class InvestorsController extends AppController
         }
     } 
 
-    public function update_ifua()
+    // public function update_ifua()
+    // {
+    //     try
+    //     {  
+    //     	$data_update = [];
+    //         $inv =  Investor::select('investor_id','cif')
+    //                  ->where('is_active', 'Yes')
+    //                  ->whereNotNull('sid')
+    //                  ->whereNull('ifua')
+    //                 ->get();    
+
+
+    //         foreach($inv as $val) {
+    //         	if(!empty($val->cif)) {
+    //                $api_ifua = $this->api_ws(['sn' => 'InvestorWMS', 'val' => [$val->cif]])->original;
+	//                 if(!empty($api_ifua['data']->ifua)) {
+	//                     Investor::where([['cif', $val->cif],['is_active','Yes']])->update(['ifua' => $api_ifua['data']->ifua]);
+	// 		   			$data_update[] = ['cif'=>$val->cif,'ifua'=>$api_ifua['data']->ifua];
+	//                 }    
+    //         	}
+    //         }
+
+    //         return $this->app_response('Update IFUA Investor By CIF', $data_update); 
+    //     }
+    //     catch(\Exception $e)
+    //     {
+    //         return $this->app_catch($e);
+    //     } 
+    // }  
+	
+	public function update_ifua()
     {
         try
         {  
-        	$data_update = [];
-            $inv =  Investor::select('investor_id','cif')
-                     ->where('is_active', 'Yes')
-                     ->whereNotNull('sid')
-                     ->whereNull('ifua')
-                    ->get();    
-
-
-            foreach($inv as $val) {
-            	if(!empty($val->cif)) {
-                   $api_ifua = $this->api_ws(['sn' => 'InvestorWMS', 'val' => [$val->cif]])->original;
-	                if(!empty($api_ifua['data']->ifua)) {
-	                    Investor::where([['cif', $val->cif],['is_active','Yes']])->update(['ifua' => $api_ifua['data']->ifua]);
-			   			$data_update[] = ['cif'=>$val->cif,'ifua'=>$api_ifua['data']->ifua];
-	                }    
-            	}
-            }
+				$chunkSize = 1000;
+			$data_update = [];
+			Investor::select('investor_id','cif')
+	         ->where([['is_active', 'Yes'], ['valid_account', 'Yes']])
+	         ->chunk($chunkSize, function ($inv) use (&$data_update) {
+	             foreach ($inv as $val) {
+	                 if (!empty($val->cif)) {
+	                     $api_sid = $this->api_ws(['sn' => 'InvestorWMS', 'val' => [$val->cif]])->original;
+	                     if (!empty($api_sid['data']->sidMf) || !empty($api_sid['data']->ifua)) {
+							Investor::where([['cif', $val->cif], ['is_active', 'Yes']])
+								->update([
+									'ifua' => $api_sid['data']->ifua ?? null,
+									'sid'  => $api_sid['data']->sidMf ?? null
+								]);
+							$data_update[] = [
+								'cif'  => $val->cif,
+								'sid'  => $api_sid['data']->sidMf ?? null,
+								'ifua' => $api_sid['data']->ifua ?? null
+							];
+	                     }    
+	                 }
+	             }
+	         });
 
             return $this->app_response('Update IFUA Investor By CIF', $data_update); 
         }
@@ -281,6 +317,6 @@ class InvestorsController extends AppController
         {
             return $this->app_catch($e);
         } 
-    }         
+    }                
               
 }

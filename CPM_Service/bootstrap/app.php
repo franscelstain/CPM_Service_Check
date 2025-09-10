@@ -64,6 +64,11 @@ $app->singleton(
 */
 
 $app->configure('app');
+$app->configure('jwt');
+$app->configure('ldap');
+$app->configure('ldap_auth');
+
+config(['jwt.secret' => env('JWT_SECRET', 'fallback_key')]);
 
 /*
 |--------------------------------------------------------------------------
@@ -102,12 +107,15 @@ $app->register(App\Providers\AppServiceProvider::class);
 $app->register(App\Providers\AuthServiceProvider::class);
 // $app->register(App\Providers\EventServiceProvider::class);
 $app->register(Tymon\JWTAuth\Providers\LumenServiceProvider::class);
+$app->register(Illuminate\Database\Eloquent\LegacyFactoryServiceProvider::class);
 $app->register(Illuminate\Filesystem\FilesystemServiceProvider::class);
 $app->register(Illuminate\Mail\MailServiceProvider::class);
 $app->register(Illuminate\Notifications\NotificationServiceProvider::class);
 $app->register(Illuminate\Notifications\NotificationServiceProvider::class);
 $app->register(Maatwebsite\Excel\ExcelServiceProvider::class);
 $app->register(App\Providers\RepositoryServiceProvider::class);
+$app->register(Laravel\Lumen\Console\ConsoleServiceProvider::class);
+//$app->register(LdapRecord\Laravel\LdapServiceProvider::class);
 
 $app->configure('filesystems');
 //$app->alias('Storage', Illuminate\Support\Facades\Storage::class);

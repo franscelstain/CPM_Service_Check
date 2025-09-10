@@ -3,6 +3,8 @@
 namespace App\Repositories\Products;
 
 use App\Interfaces\Products\PriceRepositoryInterface;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use DB;
 
 class PriceRepository implements PriceRepositoryInterface
@@ -18,24 +20,41 @@ class PriceRepository implements PriceRepositoryInterface
 
     public function getLatestProductPrices(array $productIds)
     {
-        $latestPrice = DB::table('m_products_prices')
-            ->where('is_active', 'Yes')
-            ->whereIn('product_id', $productIds)
-            ->select('product_id', DB::raw("max(price_date) as latest_date"))
-            ->groupBy('product_id');
+        $results = [];
 
-        return DB::table('m_products_prices as mpp')
-            ->joinSub($latestPrice, 'latest', function ($join) {
-                $join->on('mpp.product_id', 'latest.product_id')
-                     ->on('mpp.price_date', 'latest.latest_date');
-            })
-            ->select(
-                'mpp.product_id', 
-                'mpp.price_date', 
-                'mpp.price_value', 
-                DB::raw('MAX(mpp.price_date) OVER () as latest_nav_date'
-            ))
-            ->get();
+        // Ambil harga NAV terbaru per produk, cache per produk
+        foreach ($productIds as $id) {
+            $cacheKey = "latest_price_{$id}_" . Carbon::now()->toDateString();
+
+            $price = Cache::remember($cacheKey, 3600, function () use ($id) {
+                return DB::table('m_products_prices')
+                    ->where('product_id', $id)
+                    ->where('is_active', 'Yes')
+                    ->orderByDesc('price_date')
+                    ->limit(1)
+                    ->select('product_id', 'price_date', 'price_value')
+                    ->first();
+            });
+
+            if ($price) {
+                $results[] = $price;
+            }
+        }
+
+        // Ambil tanggal NAV paling baru secara global
+        $latestNavDate = Cache::remember('latest_nav_date_' . Carbon::now()->toDateString(), 3600, function () {
+            return DB::table('m_products_prices')
+                ->where('is_active', 'Yes')
+                ->max('price_date');
+        });
+
+        // Tambahkan latest_nav_date ke setiap baris hasil
+        $results = array_map(function ($row) use ($latestNavDate) {
+            $row->latest_nav_date = $latestNavDate;
+            return $row;
+        }, $results);
+
+        return $results;
     }
 
     public function listData($filters, $limit = 10, $page = 1, $colName = 'product_name', $colSort = 'asc')

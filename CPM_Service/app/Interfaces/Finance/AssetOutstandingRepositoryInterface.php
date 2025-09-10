@@ -5,10 +5,10 @@ namespace App\Interfaces\Finance;
 interface AssetOutstandingRepositoryInterface
 {
     public function assetLatestDate($investorId, $outDate);
-    public function baseQueryInvestorsByCategoryWithCurrentBalance(Builder $latestData, array $categoryIds);
-    public function countInvestorsByCategoryWithCurrentBalance(Builder $latestData, $aumDate, array $categoryIds, $targetAum, $salesId = null);
+    public function baseQueryInvestorsByCategoryWithCurrentBalance(array $categoryIds);
+    public function countInvestorsByCategoryWithCurrentBalance($aumDate, array $categoryIds, $targetAum, $salesId = null);
     public function getAssetMutualClass($investorId, $outDate);
-    public function getCategoryBalance($investorId, $category, $outDate);
+    public function getCategoryBalance($investorId, $outDate);
     public function getIntegration();
     public function latestDataDate($outDate);
     public function latestDataDateDowngrade($outDate);

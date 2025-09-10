@@ -17,7 +17,7 @@ class Category extends Model
 			'investor_category_name' => ['required', Rule::unique('u_investors_categories')->ignore($id, 'investor_category_id')->where(function ($query) {
                 return $query->where('is_active', 'Yes');
             })],
-            'description' => 'required|min:1|max:225'
+            'description' => 'min:1|max:225'
 		];
 	}
 }

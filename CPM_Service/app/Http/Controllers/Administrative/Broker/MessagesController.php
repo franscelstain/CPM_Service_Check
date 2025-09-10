@@ -24,71 +24,85 @@ class MessagesController extends AppController
 {
     private function __notif($code, $interval = true)
     {
-        $date       = [];
-        $setNotif   = Notification::where([['is_active', 'Yes'], ['notif_code', $code]])
-                    ->where(function($qry){
-                        $qry->where('notif_web', true)
-                            ->orWhere('notif_mail', true)
-                            ->orWhere('notif_mobile', true);
-                    })
-                    ->orderBy('created_at', 'desc')
-                    ->first();
-        if (!empty($setNotif->id) && $interval)
-        {
-            $arr_intvl  = [];
-            $interval   = NotificationInterval::where([['notif_id', $setNotif->id], ['is_active', 'Yes']])->orderBy('continuous', 'asc')->get();
-            
-            foreach ($interval as $int)
+        try {
+            $date       = [];
+            $setNotif   = Notification::where([['is_active', 'Yes'], ['notif_code', $code]])
+                        ->where(function($qry){
+                            $qry->where('notif_web', true)
+                                ->orWhere('notif_mail', true)
+                                ->orWhere('notif_mobile', true);
+                        })
+                        ->orderBy('created_at', 'desc')
+                        ->first();
+            if (!empty($setNotif->id) && $interval)
             {
-                $rmd = $int->reminder;
+                $arr_intvl  = [];
+                $interval   = NotificationInterval::where([['notif_id', $setNotif->id], ['is_active', 'Yes']])->orderBy('continuous', 'asc')->get();
                 
-                if ($rmd == 'H' && !in_array($rmd, $arr_intvl))
+                foreach ($interval as $int)
                 {
-                    $date[] = date('Y-m-d');
-                    $arr_intvl[$rmd] = $int->count_reminder;
-                }
-                else
-                {
-                    if ($int->continuous)
+                    $rmd = $int->reminder;
+                    
+                    if ($rmd == 'H' && !in_array($rmd, $arr_intvl))
                     {
-                        for ($i = $int->count_reminder; $i >= 1; $i--)
+                        $date[] = date('Y-m-d');
+                        $arr_intvl[$rmd] = $int->count_reminder;
+                    }
+                    else
+                    {
+                        if ($int->continuous)
                         {
-                            if (empty($arr_intvl[$rmd]) || !in_array($i, $arr_intvl[$rmd]))
+                            for ($i = $int->count_reminder; $i >= 1; $i--)
                             {
-                                $opr    = $rmd == 'H-' ? '+' : '-';
-                                $date[] = date('Y-m-d', strtotime($opr.$i. ' days'));
+                                if (empty($arr_intvl[$rmd]) || !in_array($i, $arr_intvl[$rmd]))
+                                {
+                                    $opr    = $rmd == 'H-' ? '+' : '-';
+                                    $date[] = date('Y-m-d', strtotime($opr.$i. ' days'));
+                                }
                             }
                         }
-                    }
-                    elseif (empty($arr_intvl[$rmd]) || !in_array($int->count_reminder, $arr_intvl[$rmd]))
-                    {
-                        $opr    = $rmd == 'H-' ? '+' : '-';
-                        $date[] = date('Y-m-d', strtotime($opr.$int->count_reminder. ' days'));
-                        $arr_intvl[$rmd][] = $int->count_reminder;
+                        elseif (empty($arr_intvl[$rmd]) || !in_array($int->count_reminder, $arr_intvl[$rmd]))
+                        {
+                            $opr    = $rmd == 'H-' ? '+' : '-';
+                            $date[] = date('Y-m-d', strtotime($opr.$int->count_reminder. ' days'));
+                            $arr_intvl[$rmd][] = $int->count_reminder;
+                        }
                     }
                 }
             }
+            return (object) ['date' => $date, 'setup' => $setNotif];
         }
-        return (object) ['date' => $date, 'setup' => $setNotif];
+        catch (\Exception $e)
+        {
+            \Log::error('Error in __notif: ' . $e->getMessage(), ['exception' => $e]);
+            return [];
+        }
     }
     
     private function __notif_assign_to($cat)
     {
-        $assign = [];
+        try {
+            $assign = [];
 
-        if(!empty($cat)) {
-            $data   = Category::where('is_active', 'Yes')->whereIn('usercategory_id', $cat)->get();
+            if(!empty($cat)) {
+                $data   = Category::where('is_active', 'Yes')->whereIn('usercategory_id', $cat)->get();
 
-            foreach ($data as $dt)
-            {
-                if (in_array($dt->usercategory_name, ['Investor', 'Sales']))
-                    $assign['inv'][$dt->usercategory_name] = $dt->usercategory_id;
-                else
-                    $assign['usr'][] = $dt->usercategory_id;
-            }
-        }    
-        
-        return $assign;        
+                foreach ($data as $dt)
+                {
+                    if (in_array($dt->usercategory_name, ['Investor', 'Sales']))
+                        $assign['inv'][$dt->usercategory_name] = $dt->usercategory_id;
+                    else
+                        $assign['usr'][] = $dt->usercategory_id;
+                }
+            }    
+            
+            return $assign;  
+        }
+        catch (\Exception $e)
+        {
+            \Log::error('Error in __notif_assign_to: ' . $e->getMessage(), ['exception' => $e]);
+            return [];
+        }      
     }
     
     public function __notif_batch()
@@ -96,11 +110,12 @@ class MessagesController extends AppController
         try
         {
             $user = $this->auth_user();
-            if ($user->usercategory_name == 'Investor')
-            NotifInvestor::where('investor_id', $user->id)->update(['notif_batch' => true, 'notif_read' => true]);
+            if ($user->usercategory_name == 'Investor') {
+                NotifInvestor::where('investor_id', $user->id)->update(['notif_batch' => true, 'notif_read' => true]);
                 // NotifInvestor::where('investor_id', $user->investor_id)->update(['notif_batch' => true, 'notif_read' => true]);
-            else
+            } else {
                 NotifUser::where('user_id', $user->id)->update(['notif_batch' => true, 'notif_read' => true]);
+            }
             return $this->app_response('Notif Batch', 'Notif successfully updated');
         }
         catch (\Exception $e)
@@ -114,10 +129,11 @@ class MessagesController extends AppController
         try
         {
             $user = $this->auth_user();
-            if ($user->usercategory_name == 'Investor')
-            NotifInvestor::where('investor_id', $user->id)->update(['notif_read' => true, 'notif_web' => true]);
-            else
+            if ($user->usercategory_name == 'Investor') {
+                NotifInvestor::where('investor_id', $user->id)->update(['notif_read' => true, 'notif_web' => true]);
+            } else {
                 NotifUser::where('user_id', $user->id)->update(['notif_read' => true, 'notif_web' => true]);
+            }
             return $this->app_response('Notif Batch', 'Notif successfully updated');
         }
         catch (\Exception $e)
@@ -157,83 +173,97 @@ class MessagesController extends AppController
     
     private function __notif_email($notif, $dt, $mail = [])
     {
-        $to_mail    = !empty($dt->email) ? $dt->email : '';
-        if ($notif->notif_mail && !empty($notif->email_content_id) && !empty($to_mail))
-        {
-            $new    = array_map(function($q) use ($dt) { return !empty($dt->$q) ? $dt->$q : ''; }, $mail);
-            $mail   = array_merge(['content_id' => $notif->email_content_id, 'to' => $to_mail], ['new' => $new]);
-            $this->app_sendmail($mail);
+        try {
+            $to_mail    = !empty($dt->email) ? $dt->email : '';
+            if ($notif->notif_mail && !empty($notif->email_content_id) && !empty($to_mail))
+            {
+                $new    = array_map(function($q) use ($dt) { return !empty($dt->$q) ? $dt->$q : ''; }, $mail);
+                $mail   = array_merge(['content_id' => $notif->email_content_id, 'to' => $to_mail], ['new' => $new]);
+                $this->app_sendmail($mail);
+            }
+            return $mail;
         }
-        return $mail;
+        catch (\Exception $e)
+        {
+            \Log::error('Error in __notif_email: ' . $e->getMessage(), ['exception' => $e]);
+            return [];
+        }
     }
     
     private function __notif_publish($qry, $notif, $role = [])
     {
-        $web    = $mobile = $email = [];
-        $count  = !empty($role->qry) && $role->qry == 'not' ? count($qry) : $qry->count();
-        if ($count > 0)
-        {   
-            if(!empty($notif->assign_to)) {    
-                $user       = $this->__notif_assign_to(json_decode($notif->assign_to));
-                $assign_to  = $user['inv'] ? $user['inv'] : array();
-                foreach ($qry as $q)
-                {
-                    if (array_key_exists('Investor', $assign_to))
-                    {  
-                        $web['Investor'][]      = $this->__notif_web($notif, $q, $q->investor_id, $role->web, 'Investor');
-                        $email['Investor'][]    = $this->__notif_email($notif, $q, $role->email->column);
-                    }
-                    
-                    if (array_key_exists('Sales', $assign_to))
-                    {   
+        try {
+            $web    = $mobile = $email = [];
+            $count  = !empty($role->qry) && $role->qry == 'not' ? count($qry) : $qry->count();
+            if ($count > 0)
+            {   
+                if(!empty($notif->assign_to)) {    
+                    $user       = $this->__notif_assign_to(json_decode($notif->assign_to));
+                    $assign_to  = $user['inv'] ? $user['inv'] : array();
+                    foreach ($qry as $q)
+                    {
+                        if (array_key_exists('Investor', $assign_to))
+                        {  
+                            $web['Investor'][]      = $this->__notif_web($notif, $q, $q->investor_id, $role->web, 'Investor');
+                            $email['Investor'][]    = $this->__notif_email($notif, $q, $role->email->column);
+                        }
+                        
+                        if (array_key_exists('Sales', $assign_to))
+                        {   
 
-                        if (isset($q->sales_id))
-                        {
-                            if (!empty($q->sales_id))
+                            if (isset($q->sales_id))
                             {
-                                $web['Sales'][]     = $this->__notif_web($notif, $q, $q->sales_id, $role->web);
-                                $email['Sales'][]   = $this->__notif_email($notif, $q, $role->email->column);
+                                if (!empty($q->sales_id))
+                                {
+                                    $web['Sales'][]     = $this->__notif_web($notif, $q, $q->sales_id, $role->web);
+                                    $email['Sales'][]   = $this->__notif_email($notif, $q, $role->email->column);
+                                }
+                            }
+                            else
+                            {
+                                $user['usr'][] = $assign_to['Sales']; 
                             }
                         }
-                        else
-                        {
-                            $user['usr'][] = $assign_to['Sales']; 
-                        }
-                    }
-                    
-                    if (!empty($user['usr']))
-                    {
-                        $qry_user = User::join('u_users_categories as b', 'b.usercategory_id', '=', 'u_users.usercategory_id')->whereIn('u_users.usercategory_id', $user['usr'])->where([['u_users.is_active', 'Yes'], ['b.is_active', 'Yes']])->get();
                         
-                        foreach ($qry_user as $qu)
+                        if (!empty($user['usr']))
                         {
-                            $web[$qu->usercategory_name][]      = $this->__notif_web($notif, $q, $qu->user_id, $role->web);
-                            $email[$qu->usercategory_name][]    = $this->__notif_email($notif, $qu, $role->email->column);
+                            $qry_user = User::join('u_users_categories as b', 'b.usercategory_id', '=', 'u_users.usercategory_id')->whereIn('u_users.usercategory_id', $user['usr'])->where([['u_users.is_active', 'Yes'], ['b.is_active', 'Yes']])->get();
+                            
+                            foreach ($qry_user as $qu)
+                            {
+                                $web[$qu->usercategory_name][]      = $this->__notif_web($notif, $q, $qu->user_id, $role->web);
+                                $email[$qu->usercategory_name][]    = $this->__notif_email($notif, $qu, $role->email->column);
+                            }
                         }
                     }
-                }
-            } else {
-                foreach ($qry as $q)
-                {   
-                    if(!empty($q->investor_id)) 
-                    {
-                      $email['Investor'][]    = $this->__notif_email($notif, $q, $role->email->column);
-                      $web['Investor'][]      = $this->__notif_web($notif, $q, $q->investor_id, $role->web, 'Investor');
-                    }
-                    
-                    if(!empty($q->user_id)) { 
-                      $web['Sales'][]     = $this->__notif_web($notif, $q, $q->user_id, $role->web);
-                      $email['Sales'][]   = $this->__notif_email($notif, $q, $role->email->column);
-                    }    
+                } else {
+                    foreach ($qry as $q)
+                    {   
+                        if(!empty($q->investor_id)) 
+                        {
+                        $email['Investor'][]    = $this->__notif_email($notif, $q, $role->email->column);
+                        $web['Investor'][]      = $this->__notif_web($notif, $q, $q->investor_id, $role->web, 'Investor');
+                        }
+                        
+                        if(!empty($q->user_id)) { 
+                        $web['Sales'][]     = $this->__notif_web($notif, $q, $q->user_id, $role->web);
+                        $email['Sales'][]   = $this->__notif_email($notif, $q, $role->email->column);
+                        }    
 
-                    if(!empty($q->sales_id)) { 
-                      $web['Sales'][]     = $this->__notif_web($notif, $q, $q->sales_id, $role->web);
-                      $email['Sales'][]   = $this->__notif_email($notif, $q, $role->email->column);
+                        if(!empty($q->sales_id)) { 
+                        $web['Sales'][]     = $this->__notif_web($notif, $q, $q->sales_id, $role->web);
+                        $email['Sales'][]   = $this->__notif_email($notif, $q, $role->email->column);
+                        }    
                     }    
                 }    
-            }    
+            }
+            return ['web' => $web, 'mobile' => $mobile, 'email' => $email];
         }
-        return ['web' => $web, 'mobile' => $mobile, 'email' => $email];
+        catch (\Exception $e)
+        {
+            \Log::error('Error in __notif_pubish: ' . $e->getMessage(), ['exception' => $e]);
+            return [];
+        }
     }
 
     private function __notif_publish_2($qry, $notif, $role = [])
@@ -257,6 +287,7 @@ class MessagesController extends AppController
         }
         return ['web' => $web, 'mobile' => $mobile, 'email' => $email];
     }
+
     private function __notif_replace($obj, $role, $message)
     {
         if (!empty($role))
@@ -274,10 +305,11 @@ class MessagesController extends AppController
     {
         $user = $this->auth_user();
         if ($user && isset($user->usercategory_name)) {
-            if ($user->usercategory_name == 'Investor')
+            if ($user->usercategory_name == 'Investor') {
                 NotifInvestor::where('investor_id', $user->id)->update(['notif_send' => true, 'notif_read' => true]);
-            else
+            } else {
                 NotifUser::where('user_id', $user->id)->update(['notif_send' => true, 'notif_read' => true]);
+            }
         } else {
             // Handle jika $user tidak valid atau properti usercategory_name tidak tersedia
             throw new \Exception("Invalid user or user category");
@@ -289,16 +321,17 @@ class MessagesController extends AppController
         try
         {
             $user = $this->auth_user();
-            if ($user->usercategory_name == 'Investor')
+            if ($user->usercategory_name == 'Investor') {
                 $data = NotifInvestor::where([['investor_id', $user->id], ['is_active', 'Yes'], ['notif_batch', false], ['notif_send', false]])->orderBy('created_at', 'desc');
-            else
+            } else {
                 $data = NotifUser::where([['user_id', $user->id], ['is_active', 'Yes'], ['notif_batch', false], ['notif_send', false]])->orderBy('created_at', 'desc');
-            
+            }
             $num    = $data->count();
             $notif  = $data->get();
             
-            if ($num > 0)
+            if ($num > 0) {
                 $this->__notif_send();
+            }
             
             return $this->app_response('Notify', ['notif' => $notif, 'batch' => $num]);
         }
@@ -316,11 +349,11 @@ class MessagesController extends AppController
             $limit  = !empty($request->limit) ? $request->limit : 10;
             $page   = !empty($request->page) ? $request->page : 1;
             
-            if ($auth->usercategory_name == 'Investor')
+            if ($auth->usercategory_name == 'Investor') {
                 $data = NotifInvestor::where([['investor_id', $auth->id], ['is_active', 'Yes']])->orderBy('notif_batch')->orderBy('notif_read')->orderBy('created_at', 'desc');
-            else
+            } else {
                 $data = NotifUser::where([['user_id', $auth->id], ['is_active', 'Yes']])->orderBy('notif_batch')->orderBy('notif_read')->orderBy('created_at', 'desc');
-            
+            }
             return $this->app_response('Notification', $data->paginate($limit, ['*'], 'page', $page));
         }
         catch (\Exception $e)
@@ -331,24 +364,32 @@ class MessagesController extends AppController
     
     private function __notif_web($notif, $obj, $id, $role = [], $user = '')
     {
-        $data = [];
-        if ($notif->notif_web)
-        {
-            $msg_text   = !empty($role->message) ? $this->__notif_replace($obj, $role->message, $notif->text_message) : $notif->text_message;
-            $title      = !empty($role->title) ? $this->__notif_replace($obj, $role->title, $notif->title) : $notif->title; 
-            $data       = ['notif_title'    => $title,
-                           'notif_desc'     => $msg_text,
-                           'notif_link'     => $notif->redirect,
-                           'created_by'     => 'System',
-                           'created_host'   => '::1'
-                          ];
-            
-            if ($user == 'Investor')
-                NotifInvestor::create(array_merge($data, ['investor_id' => $id]));
-            else
-                NotifUser::create(array_merge($data, ['user_id' => $id]));
+        try {
+            $data = [];
+            if ($notif->notif_web)
+            {
+                $msg_text   = !empty($role->message) ? $this->__notif_replace($obj, $role->message, $notif->text_message) : $notif->text_message;
+                $title      = !empty($role->title) ? $this->__notif_replace($obj, $role->title, $notif->title) : $notif->title; 
+                $data       = ['notif_title'    => $title,
+                            'notif_desc'     => $msg_text,
+                            'notif_link'     => $notif->redirect,
+                            'created_by'     => 'System',
+                            'created_host'   => '::1'
+                            ];
+                
+                if ($user == 'Investor') {
+                    NotifInvestor::create(array_merge($data, ['investor_id' => $id]));
+                } else {
+                    NotifUser::create(array_merge($data, ['user_id' => $id]));
+                }
+            }
+            return $data;
         }
-        return $data;
+        catch (\Exception $e)
+        {
+            \Log::error('Error in __notif_web: ' . $e->getMessage(), ['exception' => $e]);
+            return [];
+        }
     }
     
     public function atm_expired($user)
@@ -381,10 +422,11 @@ class MessagesController extends AppController
                             break;
                         default:
                             $data   = Investor::select('u_investors.investor_id', 'u_investors.email', 'b.card_expired', 'u_investors.fullname', 'u_investors.cif')
-                                    ->join('u_investors_card_priorities as b', 'b.cif', '=', 'u_investors.cif')->where('b.is_active', 'Yes');
+                                    ->join('u_investors_card_priorities as b', 'b.cif', '=', 'u_investors.cif')->where('b.is_active', 'Yes')
+                                    ->where('u_investors.valid_account', 'Yes');
                             $role   = json_decode(json_encode(['web' =>['message' => ['{time_status}' => 'card_expired']], 'email' => ['column' => ['fullname', 'card_expired']]]));
                     }
-                    $data   = $data->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['b.card_expired', $dte]])->get();
+                    $data   = $data->where([['u_investors.is_active', 'Yes'], ['b.card_expired', $dte]])->get();
                     $result = $this->__notif_publish($data, $notif->setup, $role);
                 }
             }
@@ -418,12 +460,12 @@ class MessagesController extends AppController
                         case 'Sales':
                             $data = Investor::select('u_investors.investor_id', 'u_investors.date_of_birth', 'u_investors.sales_id', 'b.email', 'u_investors.fullname', 'u_investors.cif', 'b.fullname as sales_name')
                                     ->join('u_users as b', 'u_investors.sales_id', '=', 'b.user_id')
-                                    ->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['b.is_active', 'Yes']]);
+                                    ->where([['u_investors.is_active', 'Yes'], ['b.is_active', 'Yes']]);
                             $role   = ['web' =>['message' => ['{time_status}' =>  'date_of_birth', '{cif}' => 'cif', '{fullname}' => 'fullname']], 'email' => ['column' => ['sales_name', 'fullname', 'cif']]];
                             break;
                         default:
                             $data   = Investor::select('investor_id', 'email', 'date_of_birth', 'fullname', 'cif')
-                                        ->where([['is_active', 'Yes'], ['valid_account', 'Yes']]);
+                                        ->where('is_active', 'Yes')->where('valid_account', 'Yes');
                             $role   = ['web' =>['message' => ['{fullname}' => 'fullname']],'email' => ['column' => ['fullname', 'cif', 'date_of_birth']]];
                     }
 
@@ -458,7 +500,7 @@ class MessagesController extends AppController
                     $data   =  Investor::select('u_investors.sales_id','c.user_id','c.email', 'b.edd_date', 'u_investors.fullname', 'u_investors.cif','c.fullname as sales_name')
                             ->join('u_investors_edd as b', 'u_investors.investor_id', '=', 'b.investor_id')->where('b.is_active', 'Yes')
                             ->join('u_users as c', 'u_investors.sales_id', '=', 'c.user_id')
-                            ->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['c.is_active', 'Yes']])
+                            ->where([['u_investors.is_active', 'Yes'], ['c.is_active', 'Yes']])
                             ->whereIn('b.edd_date', $notif->date)
                             ->get();
                              // return $this->app_response('Edd Expired', $data);
@@ -497,17 +539,17 @@ class MessagesController extends AppController
                             $data   = Investor::select('u_investors.sales_id', 'u_investors.profile_expired_date', 'b.email', 'u_investors.cif', 'u_investors.fullname', 'c.profile_name' , 'b.fullname as sales_name')
                                     ->join('u_users as b', 'u_investors.sales_id', '=', 'b.user_id')
                                     ->join('m_risk_profiles as c','u_investors.profile_id', '=', 'c.profile_id')->where('c.is_active', 'Yes')
-                                    ->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['b.is_active', 'Yes']]);
+                                    ->where([['u_investors.is_active', 'Yes'], ['b.is_active', 'Yes']]);
                             $role   = json_decode(json_encode(['web' =>['message' => ['{time_status}' => 'profile_expired_date', '{profile_expired}' => 'profile_expired_date', '{cif}' => 'cif', '{fullname}' => 'fullname']], 'email' => ['column' => ['sales_name', 'fullname', 'cif', 'profile_name', 'profile_expired_date']]]));
                             break;
                         default:
                             $data = Investor::select('investor_id', 'profile_expired_date', 'sales_id', 'email', 'cif', 'fullname')
                                     ->join('m_risk_profiles as b', 'u_investors.profile_id', '=', 'b.profile_id')->where('b.is_active', 'Yes')
-                                    ->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes']]);
+                                    ->where('u_investors.is_active', 'Yes')->where('u_investors.valid_account', 'Yes');
                             $role   = json_decode(json_encode(['web' =>['message' => ['{time_status}' =>  'profile_expired_date', '{profile_expired}' => 'profile_expired_date']],'email' => ['column' => ['fullname', 'profile_expired_date']]]));
                     }
 
-                    $data   = $data->whereIn('u_investors.profile_expired_date', $notif->date)->get();
+                    $data   = $data->whereDate('u_investors.profile_expired_date', $dte)->get();
                     $role   = $role;
                     $result = $this->__notif_publish($data, $notif->setup, $role);
                 }
@@ -548,11 +590,12 @@ class MessagesController extends AppController
                         $data   = Investor::select('u_investors.investor_id', 'u_investors.fullname','u_investors.cif','u_investors.email', 'd.aum_lastdate', 'b.target_aum_amount', 'b.current_aum_amount')
                                 ->join('u_investors_aum_provision as b', 'u_investors.investor_id', '=', 'b.investor_id')->where('b.is_active', 'Yes')
                                 // ->join('u_investors_accounts as c', 'u_investors.investor_id', '=', 'c.investor_id')->where('c.is_active', 'Yes')
-                                ->join('u_investors_aum_provision as d', 'u_investors.investor_id', '=', 'd.investor_id')->where('d.is_active', 'Yes'); 
+                                ->join('u_investors_aum_provision as d', 'u_investors.investor_id', '=', 'd.investor_id')
+                                ->where('d.is_active', 'Yes')->where('u_investors.valid_account', 'Yes'); 
                         $role   = json_decode(json_encode(['web' =>['message' => ['{TargetAUM}' =>  'target_aum_amount']], 'email' => ['column' => ['fullname', 'cif']], 'email' => ['column' => ['fullname', 'aum_lastdate']]]));
                 }
 
-                $data = $data->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['b.aum_lastdate', $notif->date]])
+                $data = $data->where([['u_investors.is_active', 'Yes'], ['b.aum_lastdate', $notif->date]])
                     ->whereRaw('b.current_aum_amount < b.target_aum_amount')
                     ->get();
                 $role   = $role;
@@ -597,7 +640,7 @@ class MessagesController extends AppController
     //                                 ->leftJoin('u_investors_accounts as c', function($qry) { return $qry->on('u_investors.investor_id', '=', 'c.investor_id')->where('c.is_active', 'Yes'); });
     //                         $role   = json_decode(json_encode(['web' =>['message' => ['{target_aum}' =>  'aum_lastdate']], 'email' => ['column' => ['fullname', 'cif', 'account_no']], 'email' => ['column' => ['fullname', 'cif', 'account_no']]]));
     //                 }
-    //                 $data = $data->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes']])
+    //                 $data = $data->where([['u_investors.is_active', 'Yes']])
     //                     ->whereIn('b.aum_lastdate', $dte)
     //                     // ->orWhere('b.aum_lastdate', '=', $this->app_date())
     //                     ->get();
@@ -641,7 +684,8 @@ class MessagesController extends AppController
                     default:
                         $data   = Investor::select('u_investors.investor_id', 'u_investors.email', 'b.account_no', 'b.due_date', 'u_investors.cif', 'b.outstanding_date', 'u_investors.fullname')
                                 //->leftJoin('t_assets_outstanding as b', function($qry) { return $qry->on('u_investors.investor_id', '=', 'b.investor_id')->where('b.is_active', 'Yes'); });
-                               ->join('t_assets_outstanding as b', 'u_investors.investor_id', '=', 'b.investor_id');
+                               ->join('t_assets_outstanding as b', 'u_investors.investor_id', '=', 'b.investor_id')
+                               ->where('u_investors.valid_account', 'Yes');
                          $role  = json_decode(json_encode(['web' =>['message' => ['{due_date}' =>  'due_date', '{account_no}' => 'account_no']], 'email' => ['column' => ['fullname', 'account_no', 'due_date']]]));
                 }
                 
@@ -694,11 +738,12 @@ class MessagesController extends AppController
                                 ->join('m_products as b', 't_assets_outstanding.product_id', '=', 'b.product_id')
                                 ->join('m_products_period as c', 't_assets_outstanding.product_id', '=', 'c.product_id')
                                 ->join('t_goal_investment as d', 'd.investor_id', '=', 't_assets_outstanding.investor_id')
-                                ->join('u_investors as e', 't_assets_outstanding.investor_id', '=', 'e.investor_id');
+                                ->join('u_investors as e', 't_assets_outstanding.investor_id', '=', 'e.investor_id')
+                                ->where('e.valid_account', 'Yes');
                         break;
                 }
 
-                $data   = $data->where([['c.is_active', 'Yes'], ['b.is_active', 'Yes'], ['t_assets_outstanding.is_active', 'Yes'], ['d.is_active', 'Yes'], ['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['t_assets_outstanding.outstanding_date', $this->app_date()], ['c.return_1day', '<=', -2]])
+                $data   = $data->where([['c.is_active', 'Yes'], ['b.is_active', 'Yes'], ['t_assets_outstanding.is_active', 'Yes'], ['d.is_active', 'Yes'], ['u_investors.is_active', 'Yes'], ['t_assets_outstanding.outstanding_date', $this->app_date()], ['c.return_1day', '<=', -2]])
                         ->get();
 
                 $result = $this->__notif_publish($data, $notif->setup);
@@ -734,7 +779,7 @@ class MessagesController extends AppController
                             ->join('m_portfolio_risk as c', 'b.portfolio_risk_id', '=', 'c.portfolio_risk_id')
                             ->join('u_users as d', 'u_investors.sales_id', '=', 'd.user_id')
                             ->join('t_goal_investment as e', 'b.portfolio_id', '=', 'e.portfolio_id')->where('e.is_active', 'Yes')
-                            ->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['b.is_active', 'Yes'], ['c.is_active', 'Yes'], ['d.is_active', 'Yes']]);
+                            ->where([['u_investors.is_active', 'Yes'], ['b.is_active', 'Yes'], ['c.is_active', 'Yes'], ['d.is_active', 'Yes']]);
                         break;
                     
                     default:
@@ -742,7 +787,8 @@ class MessagesController extends AppController
                             ->join('m_portfolio_performance as b', 'u_investors.investor_id', '=', 'b.investor_id')
                             ->join('m_portfolio_risk as c', 'b.portfolio_risk_id', '=', 'c.portfolio_risk_id')
                             ->join('t_goal_investment as e', 'b.portfolio_id', '=', 'e.portfolio_id')->where('e.is_active', 'Yes')
-                            ->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['b.is_active', 'Yes'], ['c.is_active', 'Yes']]);
+                            ->where([['u_investors.is_active', 'Yes'], ['b.is_active', 'Yes'], ['c.is_active', 'Yes']])
+                            ->where('u_investors.valid_account', 'Yes');
                 }
                 
                 $pid    = '';
@@ -780,7 +826,7 @@ class MessagesController extends AppController
                                                     ->join('m_portfolio_risk as c', 'b.portfolio_risk_id', '=', 'c.portfolio_risk_id')
                                                     ->join('u_users as d', 'u_investors.sales_id', '=', 'd.user_id')
                                                     ->join('t_goal_investment as e', 'b.portfolio_id', '=', 'e.portfolio_id')->where('e.is_active', 'Yes')
-                                                    ->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['b.is_active', 'Yes'], ['c.is_active', 'Yes'], ['d.is_active', 'Yes'], ['u_investors.investor_id',$dt->investor_id], ['b.portfolio_id', $dt->portfolio_id]])->first();
+                                                    ->where([['u_investors.is_active', 'Yes'], ['b.is_active', 'Yes'], ['c.is_active', 'Yes'], ['d.is_active', 'Yes'], ['u_investors.investor_id',$dt->investor_id], ['b.portfolio_id', $dt->portfolio_id]])->first();
                                                 $role   = ['web' =>['message' => ['{portfolio_id}' =>  'portfolio_id', '{cif}' => 'cif', '{portfolio_risk_name}' => 'risk_month', '{fullname}' => 'fullname']], 'email' => ['column' => ['sales_name', 'cif', 'fullname', 'portfolio_id', 'goal_title', 'risk_month','risk_one_month']]];
                                                 break;
                                             
@@ -789,7 +835,9 @@ class MessagesController extends AppController
                                                     ->join('m_portfolio_performance as b', 'u_investors.investor_id', '=', 'b.investor_id')
                                                     ->join('m_portfolio_risk as c', 'b.portfolio_risk_id', '=', 'c.portfolio_risk_id')
                                                     ->join('t_goal_investment as e', 'b.portfolio_id', '=', 'e.portfolio_id')->where('e.is_active', 'Yes')
-                                                    ->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['b.is_active', 'Yes'], ['c.is_active', 'Yes'], ['u_investors.investor_id',$dt->investor_id], ['b.portfolio_id', $dt->portfolio_id]])->first();
+                                                    ->where([['u_investors.is_active', 'Yes'], ['b.is_active', 'Yes'], ['c.is_active', 'Yes'], ['u_investors.investor_id',$dt->investor_id], ['b.portfolio_id', $dt->portfolio_id]])
+                                                    ->where('u_investors.valid_account', 'Yes')
+                                                    ->first();
                                                 $role   = ['web' =>['message' => ['{portfolio_id}' =>  'portfolio_id', '{goal_title}' => 'goal_title', '{fullname}' => 'fullname']], 'email' => ['column' => ['fullname', 'portfolio_id', 'goal_title', 'risk_month', 'risk_one_month']]];
                                         }
                                         $uid    = $user == 'Sales' ? 'sales_id' : 'investor_id'; 
@@ -852,7 +900,7 @@ class MessagesController extends AppController
                         $role   = json_decode(json_encode(['web' =>['message' => ['{time_status}' =>  'transaction_date', '{account_no}' => 'account_no']], 'email' => ['column' => ['fullname', 'account_no', 'transaction_date']]]));
                 }
                 
-                $data   = $data->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['c.is_active', 'Yes'], ['d.reference_code', 'SUB']])
+                $data   = $data->where([['u_investors.is_active', 'Yes'], ['c.is_active', 'Yes'], ['d.reference_code', 'SUB']])
                         ->whereIn('b.transaction_date', $notif->date)
                         ->orWhere('b.transaction_date', '=', $this->app_date())
                         ->get();
@@ -901,7 +949,7 @@ class MessagesController extends AppController
                         $role   = json_decode(json_encode(['web' =>['message' => ['{time_status}' =>  'transaction_date', '{account_no}' => 'account_no']], 'email' => ['column' => ['fullname', 'account_no', 'transaction_date']]]));
                 }
                 
-                $data   = $data->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['c.is_active', 'Yes'], ['d.reference_code', 'RED']])
+                $data   = $data->where([['u_investors.is_active', 'Yes'], ['c.is_active', 'Yes'], ['d.reference_code', 'RED']])
                         ->whereIn('b.transaction_date', $notif->date)
                         ->orWhere('b.transaction_date', '=', $this->app_date())
                         ->get();
@@ -950,7 +998,7 @@ class MessagesController extends AppController
                         $role   = json_decode(json_encode(['web' =>['message' => ['{time_status}' =>  'transaction_date', '{account_no}' => 'account_no']], 'email' => ['column' => ['fullname', 'account_no', 'transaction_date']]]));
                 }
                 
-                $data   = $data->where([['u_investors.is_active', 'Yes'], ['u_investors.valid_account', 'Yes'], ['c.is_active', 'Yes'], ['d.reference_code', 'SWTIN']])
+                $data   = $data->where([['u_investors.is_active', 'Yes'], ['c.is_active', 'Yes'], ['d.reference_code', 'SWTIN']])
                         ->whereIn('b.transaction_date', $notif->date)
                         ->orWhere('b.transaction_date', '=', $this->app_date())
                         ->get();

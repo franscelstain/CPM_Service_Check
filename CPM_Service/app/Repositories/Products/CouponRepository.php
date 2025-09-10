@@ -13,6 +13,18 @@ use DB;
 class CouponRepository implements CouponRepositoryInterface
 {
     use Responses;
+
+    public function couponWithProduct(array $productIds)
+    {
+        return DB::table('t_coupon')
+            ->select(DB::raw('MIN(coupon_date) as coupon_date'), 'product_id')
+            ->where('deleted', false)
+            ->where('coupon_date', '>', date('Y-m-d'))
+            ->whereIn('product_id', $productIds)
+            ->groupBy('product_id')
+            ->get();
+    }
+
     public function detailData($id)
     {
         try

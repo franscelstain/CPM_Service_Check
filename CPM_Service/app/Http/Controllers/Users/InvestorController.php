@@ -104,6 +104,42 @@ class InvestorController extends AppController
         }    
     }
     
+    public function bankAccountInvestor($id)
+    {
+        try
+        {
+            $data = Account::leftJoin('m_bank_branches as mbb', function($qry) { 
+                        return $qry->on('u_investors_accounts.bank_branch_id', '=', 'mbb.bank_branch_id')
+                                    ->where('mbb.is_active', 'Yes');
+                    })
+                    ->leftJoin('m_currency as mc', function($qry) { 
+                        return $qry->on('u_investors_accounts.currency_id', '=', 'mc.currency_id')
+                                    ->where('mc.is_active', 'Yes');
+                    })
+                    ->leftJoin('m_account_types as mat', function($qry) { 
+                        return $qry->on('u_investors_accounts.account_type_id', '=', 'mat.account_type_id')
+                                    ->where('mat.is_active', 'Yes');
+                    })
+                    ->where('investor_id', $id)
+                    ->where('u_investors_accounts.is_active', 'Yes')
+		            ->whereNotNull('u_investors_accounts.account_type_id')
+                    ->select(
+                        'u_investors_accounts.account_no', 
+                        'u_investors_accounts.account_name', 
+                        'mbb.branch_name', 
+                        'mc.currency_name', 
+                        'mat.account_type_name'
+                    )
+                    ->distinct()
+                    ->get();
+            return $this->app_response('Investor Bank Account', $data);
+        }
+        catch (\Exception $e)
+        {
+            return $this->app_catch($e);
+        }    
+    }
+    
     public function card(Request $request)
     {
         try
@@ -348,25 +384,23 @@ class InvestorController extends AppController
         }
     }
 
-    public function save(Request $request, $id = null)
+    public function save(Request $request, $id)
     {
         $saveby     = $this->auth_user()->usercategory_name.':'.$this->auth_user()->id.':'.$this->auth_user()->fullname;
         $is_active  = $request->input('is_active');
-        $is_enable  = $request->input('is_enable');
-        $st         = $request->method() == 'POST' && empty($id) ? 'cre' : 'upd';
-        $data       = ['is_active'      => $is_active,
-                       'is_enable'      => $is_enable,
-                       $st.'ated_by'    => $saveby,
-                       $st.'ated_host'  => $request->input('ip')
+        // $is_enable  = $request->input('is_enable');
+        // $st         = $request->method() == 'POST' && empty($id) ? 'cre' : 'upd';
+        $data       = ['is_enable'      => $is_active,
+                       'updated_by'    => $saveby,
+                       'updated_host'  => $request->input('ip')
                       ];
-        $qry        = $request->method() == 'POST' && empty($id) ? Investors::create($data) : Investors::where('investor_id', $id)->update($data);
-
-        if($is_enable == 'Yes') 
-        {
-            InvestorPasswordAttemp::where('investor_id', empty($id) ? $qry->id : $id)->update(['is_active' => 'No','attempt_count' => 0]); 
+        // $qry        = $request->method() == 'POST' && empty($id) ? Investors::create($data) : Investors::where('investor_id', $id)->update($data);
+        $qry = $request->method() == 'POST' && empty($id) ? Investors::create($data) : Investors::where('investor_id', $id)->update($data);
+        if ($is_active == 'Yes') {
+            InvestorPasswordAttemp::where('investor_id', $id)->update(['is_active' => 'No']); 
         }    
         
-        return $this->app_partials(1, 0, ['id' => empty($id) ? $qry->id : $id]);  
+        return $this->app_partials(1, 0, ['id' => $id]);  
     }
 
     public function totalinvestor(Request $request)

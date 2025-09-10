@@ -19,119 +19,120 @@ class AumRepository implements AumRepositoryInterface
                 ->first();
     }
 
-    public function getInvestorsByCategoryWithCurrentBalance($query, $startDate, $targetAum)
+    public function getInvestorsByCategoryWithCurrentBalance($query, $startDate)
     {
-        $rankedPriorities = DB::table('u_investors_card_priorities')
-                            ->select(
-                                'cif',
-                                'is_priority',
-                                'pre_approve',
-                                DB::raw('ROW_NUMBER() OVER (PARTITION BY cif ORDER BY card_expired DESC) AS rank')
-                            )
-                            ->where('is_active', 'Yes');
-
-        return $query->leftJoinSub($rankedPriorities, 'uicp', function ($join) {
-                        $join->on('ui.cif', '=', 'uicp.cif')
-                            ->where('uicp.rank', 1);
-                    })
-                    ->whereDate('tao.outstanding_date', $startDate)                   
-                    ->havingRaw('SUM(tao.balance_amount) <= ' . $targetAum);
+        return $query->leftJoin(DB::raw("(
+                        SELECT DISTINCT ON (cif)
+                            cif,
+                            is_priority,
+                            pre_approve
+                        FROM u_investors_card_priorities
+                        WHERE is_active = 'Yes'
+                        ORDER BY cif, card_expired DESC
+                    ) as uicp"), 'ui.cif', '=', 'uicp.cif')
+                    ->whereDate('tao.outstanding_date', $startDate)
+                    ->selectRaw('DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                        tao.investor_id,
+                        ui.cif,
+                        ui.fullname,
+                        tao.balance_amount,
+                        tao.data_date,
+                        uicp.is_priority,
+                        uicp.pre_approve,
+                        ui.is_enable
+                    ');
     }
 
-    public function getInvestorsByCategoryWithDowngradeBalance($baseQuery, $salesId, $startDate)
+    public function getInvestorsByCategoryWithDowngradeBalance($baseQuery, $investorIds, $startDate)
     {
-        return $baseQuery->joinSub(function ($query) use ($startDate) {
-                $query->select('investor_id', DB::raw('MAX(outstanding_date) as max_outstanding_date'))
-                    ->from('t_assets_outstanding')
-                    ->where('is_active', 'Yes')
-                    ->whereDate('outstanding_date', '<', $startDate)
-                    ->groupBy('investor_id');
-            }, 'max_outstanding_dates', function ($join) {
-                $join->on('tao.investor_id', '=', 'max_outstanding_dates.investor_id')
-                    ->on('tao.outstanding_date', '=', 'max_outstanding_dates.max_outstanding_date');
-            })
-            ->where('ui.sales_id', $salesId)
+        $baseQuery->whereIn('tao.investor_id', $investorIds)
+            ->whereDate('tao.outstanding_date', '<', $startDate)
             ->selectRaw("
                 tao.investor_id,
-                SUM(tao.balance_amount) AS downgrade_aum
-            ")
-            ->groupBy('tao.investor_id')
-            ->get();
+                tao.balance_amount
+            ");
+        
+        return DB::table(DB::raw("({$baseQuery->toSql()}) as a"))
+                ->mergeBindings($baseQuery)
+                ->selectRaw("
+                    investor_id,
+                    SUM(balance_amount) AS downgrade_aum
+                ")
+                ->groupBy('investor_id')
+                ->get();
     }
 
     public function listAumPriority($baseQuery, $salesId, $startDate, $targetAum, $search, $limit, $page, $colName, $colSort)
     {
-        $query = $this->getInvestorsByCategoryWithCurrentBalance($baseQuery, $startDate, $targetAum);       
+        $subquery = $this->getInvestorsByCategoryWithCurrentBalance($baseQuery, $startDate);       
         
-        if (!empty($search)) {
-            $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
-            $query->where(function ($qry) use ($search, $like) {
-                $qry->where('ui.cif', $like, "%$search%")
-                    ->orWhere('ui.fullname', $like, "%$search%");
-            });
-        }
-
-        if (!empty($colName) && !empty($colSort)) {
-            if ($colName == 'cif') {
-                $colName = 'ui.cif';
-            }
-            $query->orderBy($colName, $colSort);
-        }
+        $subquery->where('ui.sales_id', $salesId)
+                ->when(!empty($search), function ($query) use ($search) {
+                    $query->where(function ($q) use ($search) {
+                        $q->where('ui.cif', 'like', "%$search%")
+                        ->orWhere('ui.fullname', 'like', "%$search%");
+                    });
+                });
         
-        return $query->where('ui.sales_id', $salesId)
+        return DB::table(DB::raw("({$subquery->toSql()}) as a"))
+                ->mergeBindings($subquery)
                 ->selectRaw("
-                    ui.investor_id,
-                    ui.cif,
-                    ui.fullname,
-                    uicp.is_priority,
-                    uicp.pre_approve,
-                    MAX(tao.outstanding_date) AS current_date,
-                    SUM(tao.balance_amount) AS current_aum
+                    investor_id,
+                    cif,
+                    fullname,
+                    is_priority,
+                    pre_approve,
+                    MAX(data_date) AS current_date,
+                    SUM(balance_amount) AS current_aum
                 ")
                 ->groupBy(
-                    'ui.investor_id', 
-                    'ui.cif', 
-                    'ui.fullname',
-                    'uicp.is_priority',
-                    'uicp.pre_approve'
-                )
+                    'investor_id', 
+                    'cif', 
+                    'fullname',
+                    'is_priority',
+                    'pre_approve'
+                )           
+                ->havingRaw('SUM(balance_amount) <= ' . $targetAum)
+                ->when(!empty($colName) && !empty($colSort) && in_array($colName, ['cif', 'fullname', 'current_aum']), function ($q) use ($colName, $colSort) {
+                    $q->orderBy($colName, $colSort);
+                })
                 ->paginate($limit, ['*'], 'page', $page);
     }
 
     public function listDropFund($baseQuery, $salesId, $startDate, $targetAum, $search, $limit, $page, $colName, $colSort)
     {
-        $query = $this->getInvestorsByCategoryWithCurrentBalance($baseQuery, $startDate, $targetAum);        
+        $subquery = $this->getInvestorsByCategoryWithCurrentBalance($baseQuery, $startDate);
         
-        if (!empty($search)) {
-            $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
-            $query->where(function ($qry) use ($search, $like) {
-                $qry->where('ui.cif', $like, "%$search%")
-                    ->orWhere('ui.fullname', $like, "%$search%");
-            });
-        }
+        $subquery->where('ui.sales_id', $salesId)
+                ->when(!empty($search), function ($query) use ($search) {
+                    $query->where(function ($q) use ($search) {
+                        $q->where('ui.cif', 'like', "%$search%")
+                        ->orWhere('ui.fullname', 'like', "%$search%");
+                    });
+                });
 
-        if (!empty($colName) && !empty($colSort)) {
-            if ($colName == 'cif') {
-                $colName = 'ui.cif';
-            }
-            $query->orderBy($colName, $colSort);
-        }
-
-        return $query->where('ui.sales_id', $salesId)
+        return DB::table(DB::raw("({$subquery->toSql()}) as a"))
+                ->mergeBindings($subquery)
                 ->selectRaw("
-                    ui.cif,
-                    ui.fullname,
-                    uicp.is_priority,
-                    uicp.pre_approve,
-                    MAX(tao.outstanding_date) AS current_date,
-                    SUM(tao.balance_amount) AS current_aum
+                    cif,
+                    fullname,
+                    is_enable,
+                    is_priority,
+                    pre_approve,
+                    MAX(data_date) AS current_date,
+                    SUM(balance_amount) AS current_aum
                 ")
                 ->groupBy(
-                    'ui.cif', 
-                    'ui.fullname',
-                    'uicp.is_priority',
-                    'uicp.pre_approve'
+                    'cif', 
+                    'fullname',
+                    'is_enable',
+                    'is_priority',
+                    'pre_approve'
                 )
+                ->havingRaw('SUM(balance_amount) <= ' . $targetAum)                
+                ->when(!empty($colName) && !empty($colSort), function ($q) use ($colName, $colSort) {
+                    $q->orderBy($colName, $colSort);
+                })
                 ->paginate($limit, ['*'], 'page', $page);
     }
 }

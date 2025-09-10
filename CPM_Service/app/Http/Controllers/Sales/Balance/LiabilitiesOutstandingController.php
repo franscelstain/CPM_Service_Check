@@ -3,25 +3,30 @@
 namespace App\Http\Controllers\Sales\Balance;
 
 use App\Http\Controllers\AppController;
-use App\Interfaces\Balance\LiabilitiesOutstandingRepositoryInterface;
+use App\Services\Handlers\Finance\LiabilityOutstandingService;
 use Illuminate\Http\Request;
 
 class LiabilitiesOutstandingController extends AppController
 {
-    private $liabilityRepo;
+    protected $liabilityService;
     
-    public function __construct(LiabilitiesOutstandingRepositoryInterface $liabilityRepo)
+    public function __construct(LiabilityOutstandingService $liabilityService)
     {
-        $this->liabilityRepo = $liabilityRepo;
+        $this->liabilityService = $liabilityService;
     }
 
     public function integration_data()
     {
-        return $this->app_response('Labilities Outstanding - Integration', $this->liabilityRepo->getIntegration());
+        return $this->app_response('Labilities Outstanding - Integration', $this->liabilityService->getIntegration());
     }
 
-    public function liabilities(Request $request, $id)
-    {        
-        return $this->app_response('Liabilities', $this->liabilityRepo->getLiabilities($request, $id));
+    public function listLiability(Request $request, $id)
+    {
+        try {
+            $liab = $this->liabilityService->listLiability($request, $id);
+            return $this->app_response('Liabilities', $liab);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
     }
 }

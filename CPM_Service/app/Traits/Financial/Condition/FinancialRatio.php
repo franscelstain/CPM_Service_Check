@@ -12,8 +12,8 @@ trait FinancialRatio
 	private function fin_qry($type, $inv_id, $select='', $where=[])
 	{
         $union	= $type == 'Assets' ? $this->assets_outstanding($type, $inv_id, $select, $where) : $this->liability_outstanding($inv_id, $select);
-        $qry    = AssetLiability::join('m_financials', 't_assets_liabilities.financial_id', '=', 'm_financials.financial_id')
-                ->where(array_merge([['t_assets_liabilities.investor_id', $inv_id], ['m_financials.financial_type', $type], ['t_assets_liabilities.is_active', 'Yes'], ['m_financials.is_active', 'Yes']], $where))
+        $qry    = AssetLiability::join('m_financials as mf', 't_assets_liabilities.financial_id', '=', 'mf.financial_id')
+                ->where(array_merge([['t_assets_liabilities.investor_id', $inv_id], ['mf.financial_type', $type], ['t_assets_liabilities.is_active', 'Yes'], ['mf.is_active', 'Yes']], $where))
                 ->where('t_assets_liabilities.amount', '>=', 1);
         
         return (object) ['qry' => $qry, 'union' => $union];
@@ -143,7 +143,7 @@ trait FinancialRatio
                 {
                     if ($t == 'assets')
                     {
-                        $where      = !empty($request->liquidity) && $request->liquidity == 'yes' ? [['m_financials.is_liquidity', true]] : [];
+                        $where      = !empty($request->liquidity) && $request->liquidity == 'yes' ? [['mf.is_liquidity', true]] : [];
                         $fin_asset  = $this->fin_qry('Assets', $inv_id, 'balance_amount as amount', $where);
                         $res        = $fin_asset->qry->selectRaw('amount')->unionAll($fin_asset->union)->sum('amount');
                     }
@@ -212,7 +212,27 @@ trait FinancialRatio
                             ['mf.is_active', 'Yes'], ['mf.financial_name', $name], ['tal.amount', '>=', 1]])
                     ->sum('tal.amount');
 
+                $subQuery = DB::table('t_assets_outstanding')
+                            ->where('is_active', 'Yes')
+                            ->where('outstanding_date', DB::raw('CURRENT_DATE'))
+                            ->select(
+                                'investor_id',
+                                'product_id',
+                                'account_no',
+                                DB::raw('MAX(data_date) AS latest_data_date')
+                            )
+                            ->groupBy('investor_id', 'product_id', 'account_no');
+
                 $assetsAmount = DB::table('t_assets_outstanding as tao')
+                    ->joinSub($subQuery, 'latest_data', function ($join) {
+                        $join->on('tao.product_id', '=', 'latest_data.product_id')
+                            ->on('tao.account_no', '=', 'latest_data.account_no')
+                            ->on('tao.investor_id', '=', 'latest_data.investor_id')
+                            ->where(function ($query) {
+                                $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
+                                    ->orWhereNull('latest_data.latest_data_date');
+                            });
+                    })
                     ->join('m_products as mp', 'mp.product_id', 'tao.product_id')
                     ->join('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
                     ->join('m_financials_assets as mfa', 'mfa.asset_class_id', 'mac.asset_class_id')

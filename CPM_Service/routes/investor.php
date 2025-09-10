@@ -80,6 +80,7 @@ $router->group(['prefix' => 'investor'], function() use ($router) {
     $router->post('change-address', 'Investor\InvestorsController@change_address');
     $router->put('change-address', 'Investor\InvestorsController@change_address');
     $router->put('change-photo', 'Investor\InvestorsController@change_photo');
+    $router->get('bankaccount/{id}', 'Users\InvestorController@bankAccountInvestor');
     $router->get('bank-account', 'Investor\InvestorsController@bank_account');
     $router->get('investor-card', 'Investor\InvestorsController@investor_card');
     $router->get('risk-profile', 'Investor\InvestorsController@risk_profile');

@@ -339,9 +339,10 @@ class SalesController extends AppController
         $limit      = !empty($request->limit) ? $request->limit : 10;
         $page       = !empty($request->page) ? $request->page : 1;
         $offset     = ($page-1)*$limit;
-        $data       = Investor::select('u_investors.*')
-                    ->where([['sales_id', $this->auth_user()->id], ['is_active', 'Yes']]);
-
+        $data   = Investor::select('u_investors.*')->where([['sales_id', $this->auth_user()->id],['is_active', 'Yes']]);
+          
+       
+       
         if (!empty($request->search))
         {
            $data  = $data->where(function($qry) use ($request) {
@@ -354,34 +355,21 @@ class SalesController extends AppController
         $idx = 0;
         foreach ($data->get() as $dt) 
         {
-            $prior  = CardPriority::where([['cif', $dt->cif], ['is_active', 'Yes']])->first();
+            $prior  = CardPriority::where('is_active', 'Yes')->whereIn('cif',[$dt->cif])->first();
+                        // return $this->app_response('ccc', $prior);
             $created_at = !empty($prior->created_at) ? $prior->created_at : '';
             $updated_at = !empty($prior->updated_at) ? $prior->updated_at : '';
             $is_priority = !empty($prior->is_priority) ? $prior->is_priority : false;
             $pre_approve = !empty($prior->pre_approve) ? $prior->pre_approve : false;
             $dropdate = !empty($updated_at) || !empty($created_at) ? !empty($created_at) ? date_format($created_at,'d/m/Y') :date_format($updated_at,'d/m/Y') : '';
+
             if (!empty($prior) ) {
-                 $user_status = ($prior->is_active)? 'Active' : 'Non Active';
-                 $inv_prior   = ($prior->is_active and $prior->pre_approve)? true : false;
-                $inv_prior   = ($prior->is_active and $prior->pre_approve)? 'Priority' : 'Non-Priority';
-                $hasil[]     = [
-                    'cif'           => $dt->cif,
-                    'fullname'      => $dt->fullname,
-                    'drop_date'     => $dropdate,
-                    'customer_type' => (!$is_priority and !$pre_approve)? 'Non Priority' : 'Priority',
-                    'user_status'   => $user_status,
-                    'salesname'     => $this->auth_user()->fullname,
-                    'inv_prior'     => ($prior->is_active and $prior->pre_approve)? true : false,
-                    'inv_prior'     => ($prior->is_active and $prior->pre_approve)? 'Priority' : 'Non-Priority',
-                    'user_status'   => ($prior->is_active)? 'Active' : 'Non Active' 
-                ];
-            } else {
                 $inv_prior   = false;
                 $inv_prior   = 'Non-Priority';
                 $user_status =  'Non Active';
                 $hasil[] = [
-                    'cif'           => $dt->cif,
-                    'fullname'      => $dt->fullname,
+                    'cif'           => $prior->cif,
+                    'fullname'      => $prior->fullname,
                     'drop_date'     => $dropdate,
                     'customer_type' => (!$is_priority and !$pre_approve)? 'Non Priority' : 'Priority',
                     'user_status'   => $user_status,
@@ -390,8 +378,40 @@ class SalesController extends AppController
                     'inv_prior'     => 'Non-Priority',
                     'user_status'   => 'Non Active'
                 ];
-
             }
+
+            // if (!empty($prior) ) {
+            //     $user_status = ($prior->is_active)? 'Active' : 'Non Active';
+            //     $inv_prior   = ($prior->is_active and $prior->pre_approve)? true : false;
+            //     $inv_prior   = ($prior->is_active and $prior->pre_approve)? 'Priority' : 'Non-Priority';
+            //     $hasil[]     = [
+            //         'cif'           => $dt->cif,
+            //         'fullname'      => $dt->fullname,
+            //         'drop_date'     => $dropdate,
+            //         'customer_type' => (!$is_priority and !$pre_approve)? 'Non Priority' : 'Priority',
+            //         'user_status'   => $user_status,
+            //         'salesname'     => $this->auth_user()->fullname,
+            //         'inv_prior'     => ($prior->is_active and $prior->pre_approve)? true : false,
+            //         'inv_prior'     => ($prior->is_active and $prior->pre_approve)? 'Priority' : 'Non-Priority',
+            //         'user_status'   => ($prior->is_active)? 'Active' : 'Non Active' 
+            //     ];
+            // } else {
+            //     $inv_prior   = false;
+            //     $inv_prior   = 'Non-Priority';
+            //     $user_status =  'Non Active';
+            //     $hasil[] = [
+            //         'cif'           => $dt->cif,
+            //         'fullname'      => $dt->fullname,
+            //         'drop_date'     => $dropdate,
+            //         'customer_type' => (!$is_priority and !$pre_approve)? 'Non Priority' : 'Priority',
+            //         'user_status'   => $user_status,
+            //         'salesname'     => $this->auth_user()->fullname,
+            //         'inv_prior'     => false,
+            //         'inv_prior'     => 'Non-Priority',
+            //         'user_status'   => 'Non Active'
+            //     ];
+            // }
+
             //  if ($start_date!='' and $end_date!='' and !( $created_at >= $start_date and  $created_at <= $end_date)) unset($data[$idx]);
             // if ($start_date=='' and $end_date!='' and !( $created_at <= $end_date)) unset($data[$idx]);
             // if ($start_date!='' and $end_date=='' and !( $created_at >= $start_date)) unset($data[$idx]);
@@ -412,145 +432,139 @@ class SalesController extends AppController
         return $this->app_response('investor', $paginate);   
     }
 
-     public function aum_priority(Request $request) 
+    public function aum_priority(Request $request) 
     {
-        $out = [];
+        $out        = [];
         $type       = $request->type;
         $start_date = $request->start_date;
         $end_date   = $request->end_date;
         $limit      = !empty($request->limit) ? $request->limit : 10;
         $page       = !empty($request->page) ? $request->page : 1;
         $offset     = ($page-1)*$limit;
-        $aum  = AumTarget::where([['is_active', 'Yes']])->orderBy('effective_date', 'desc')->first();
-        $cat_id = $aum->asset_category;
-        //foreach ($aumTarget as $aum) 
-        { 
-            $app_date = $this->is_date($this->app_date())? $this->app_date() : date('Y-m-d');
-            if(!is_array($cat_id)) $cat_id=[$cat_id];
-            $data  = Investor::selectRaw("u_investors.cif, u_investors.investor_id, u_investors.fullname, max(outstanding_date)as date, sum(balance_amount)as amount")
-                        ->leftJoin('t_assets_outstanding as tao', 'tao.investor_id', 'u_investors.investor_id')
-                        ->leftJoin('m_products as mp', 'mp.product_id', 'tao.product_id')
-                        ->leftJoin('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
-                        ->leftJoin('m_asset_categories as mact', 'mact.asset_category_id', 'mac.asset_category_id')
-                        ->where([['sales_id', $this->auth_user()->id], ['u_investors.valid_account', 'Yes'], ['u_investors.is_active', 'Yes'], ['tao.is_active', 'Yes'], ['mp.is_active', 'Yes'], ['mac.is_active', 'Yes'], ['mact.is_active', 'Yes'] ])
-                        ->WhereIn('mac.asset_category_id', $cat_id)   
-                        ->groupBy(['u_investors.cif', 'u_investors.investor_id', 'u_investors.fullname' ]);
+        $aum        = AumTarget::where([['is_active', 'Yes']])->orderBy('effective_date', 'desc')->first();
+        $app_date   = $this->is_date($this->app_date()) ? $this->app_date() : date('Y-m-d');
+        $cat_id     = $aum->asset_category;
+        
+        if(!is_array($cat_id)) $cat_id=[$cat_id];
+        $data  = Investor::selectRaw("u_investors.cif, u_investors.investor_id, u_investors.fullname, max(outstanding_date)as date, sum(balance_amount)as amount")
+                    ->leftJoin('t_assets_outstanding as tao', 'tao.investor_id', 'u_investors.investor_id')
+                    ->leftJoin('m_products as mp', 'mp.product_id', 'tao.product_id')
+                    ->leftJoin('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
+                    ->leftJoin('m_asset_categories as mact', 'mact.asset_category_id', 'mac.asset_category_id')
+                    ->where([['sales_id', $this->auth_user()->id], ['u_investors.valid_account', 'Yes'], ['u_investors.is_active', 'Yes'], ['tao.is_active', 'Yes'], ['mp.is_active', 'Yes'], ['mac.is_active', 'Yes'], ['mact.is_active', 'Yes'] ])
+                    ->WhereIn('mac.asset_category_id', $cat_id)   
+                    ->groupBy(['u_investors.cif', 'u_investors.investor_id', 'u_investors.fullname' ]);
             
-            if (!empty($request->search))
-            {
-                $data  = $data->where(function($qry) use ($request) {
-                        $qry->where('u_investors.fullname', 'ilike', '%'. $request->search .'%')
-                            ->orWhere('u_investors.cif', 'ilike', '%'. $request->search .'%');
-                    });
-            }
+        if (!empty($request->search))
+        {
+            $data  = $data->where(function($qry) use ($request) {
+                    $qry->where('u_investors.fullname', 'ilike', '%'. $request->search .'%')
+                        ->orWhere('u_investors.cif', 'ilike', '%'. $request->search .'%');
+                });
+        }
 
-            foreach ($data->get() as $dat)    
-            {
-                $amount_goal = TransactionHistoryDay::where([['investor_id', $dat->investor_id], ['history_date', $app_date], ['is_active', 'Yes']])->whereRaw("LEFT(portfolio_id, 1) = '2'")->sum('current_balance');
-                $amount_nongoal = TransactionHistoryDay::where([['investor_id', $dat->investor_id], ['history_date', $app_date], ['is_active', 'Yes']])->where(function($qry) { $qry->whereRaw("LEFT(portfolio_id, 1) NOT IN ('2', '3')")->orWhereNull('portfolio_id'); })->sum('current_balance');
-                $tot_amount = $amount_goal + $amount_nongoal; 
+        foreach ($data->get() as $dat)    
+        {
+            $amount_goal = TransactionHistoryDay::where([['investor_id', $dat->investor_id], ['history_date', $app_date], ['is_active', 'Yes']])->whereRaw("LEFT(portfolio_id, 1) = '2'")->sum('current_balance');
+            $amount_nongoal = TransactionHistoryDay::where([['investor_id', $dat->investor_id], ['history_date', $app_date], ['is_active', 'Yes']])->where(function($qry) { $qry->whereRaw("LEFT(portfolio_id, 1) NOT IN ('2', '3')")->orWhereNull('portfolio_id'); })->sum('current_balance');
+            $tot_amount = $amount_goal + $amount_nongoal; 
 
-                if( $tot_amount < $aum->target_aum ) 
+            if( $tot_amount < $aum->target_aum ) 
+            {
+                $prior  = CardPriority::where([['cif', $dat->cif], ['is_active', 'Yes']])->first();
+                $last = $this->AUM_lastdate($dat->investor_id, $cat_id, $aum->target_aum);
+                if(!is_null($last)) 
                 {
-                    $prior  = CardPriority::where([['cif', $dat->cif], ['is_active', 'Yes']])->first();
-                   
-                    //if(!empty($prior))
-                    // {
-                        $last = $this->AUM_lastdate($dat->investor_id, $cat_id, $aum->target_aum);
-                        if(!is_null($last)) 
-                        {
-                            $lastdate = date('Y-m-d',  strtotime($last['last_date']));
-                            $diff = $this->dateDiff($lastdate, $this->app_date());
-                        } else {
-                            $lastdate = date('Y-m-d');
-                            $diff= 0;
-                        }
-                    // }
+                    $lastdate = date('Y-m-d',  strtotime($last['last_date']));
+                    $diff = $this->dateDiff($lastdate, $this->app_date());
+                } else {
+                    $lastdate = date('Y-m-d');
+                    $diff= 0;
+                }
 
-                    if ( $last['last_amount']>0 and $last['last_amount']<$aum->target_aum )  {
-                        /*
-                            Priority
-                                1. Is Priority = Yes
-                                2. Is Pre Approve = No
-                            Pre Approve
-                                1. Is Priority = Yes
-                                2. Is Pre Approve = Yes
-                                or
-                                1. Is Priority = No
-                                2. Is Pre Approve = Yes
-                            Non Priority
-                                1. Is Priority = No
-                                2. Is Pre Approve = No
-                        */
-                        $cust_type = '-';
-                        if (isset($prior->is_priority) and isset($prior->pre_approve)) {
-                            if ( $prior->is_priority && !$prior->pre_approve ) $cust_type = 'Priority';
-                            if ( $prior->is_priority && $prior->pre_approve ) $cust_type = 'Pre-Approve';
-                            if ( !$prior->is_priority && $prior->pre_approve ) $cust_type = 'Pre-Approve';
-                            if ( !$prior->is_priority && !$prior->pre_approve ) $cust_type = 'Non-Priority';
-                        }
+                if ( $last['last_amount']>0 and $last['last_amount']<$aum->target_aum )  {
+                    /*
+                        Priority
+                            1. Is Priority = Yes
+                            2. Is Pre Approve = No
+                        Pre Approve
+                            1. Is Priority = Yes
+                            2. Is Pre Approve = Yes
+                            or
+                            1. Is Priority = No
+                            2. Is Pre Approve = Yes
+                        Non Priority
+                            1. Is Priority = No
+                            2. Is Pre Approve = No
+                    */
+                    $cust_type = '-';
+                    if (isset($prior->is_priority) and isset($prior->pre_approve)) {
+                        if ( $prior->is_priority && !$prior->pre_approve ) $cust_type = 'Priority';
+                        if ( $prior->is_priority && $prior->pre_approve ) $cust_type = 'Pre-Approve';
+                        if ( !$prior->is_priority && $prior->pre_approve ) $cust_type = 'Pre-Approve';
+                        if ( !$prior->is_priority && !$prior->pre_approve ) $cust_type = 'Non-Priority';
+                    }
 
-                        if(empty($request->type))
-                        {
-                            $out[] = [ 
-                                'investor_id'           => $dat->investor_id,
-                                'fullname'              => $dat->fullname,
-                                'cif'                   => $dat->cif,
-                                'target_AUM_date'       => $aum->effective_date,
-                                'target_AUM_amount'     => (float)$aum->target_aum,
-                                'AUM_lastdate'          => $lastdate,
-                                'AUM_lastamount'        => (float)$last['last_amount'],
-                                'customer_type'         => $cust_type,
-                                'current_AUM'           => (float)$dat->amount,
-                                'days'                  => $diff,
-                                'AUM_current'           => $this->amount_all($dat->investor_id),
-                            ];
-                        }
-
-                        if($cust_type == $request->type)
-                        {
-                            $out[] = [ 
-                                'investor_id'           => $dat->investor_id,
-                                'fullname'              => $dat->fullname,
-                                'cif'                   => $dat->cif,
-                                'target_AUM_date'       => $aum->effective_date,
-                                'target_AUM_amount'     => (float)$aum->target_aum,
-                                'AUM_lastdate'          => $lastdate,
-                                'AUM_lastamount'        => (float)$last['last_amount'],
-                                'customer_type'         => $cust_type,
-                                'current_AUM'           => (float)$dat->amount,
-                                'days'                  => $diff,
-                                'AUM_current'           => $this->amount_all($dat->investor_id),
-                            ];
-                        }
-
-                        //save to DB
-                        $savedata = [
-                            'aum_lastdate'          => $lastdate,
-                            'target_aum_amount'     => (float)$aum->target_aum,
-                            'current_aum_amount'    => (float)$dat->amount,
-                            'is_active'             => 'Yes',
+                    if(empty($request->type))
+                    {
+                        $out[] = [ 
+                            'investor_id'           => $dat->investor_id,
+                            'fullname'              => $dat->fullname,
+                            'cif'                   => $dat->cif,
+                            'target_AUM_date'       => $aum->effective_date,
+                            'target_AUM_amount'     => (float)$aum->target_aum,
+                            'AUM_lastdate'          => $lastdate,
+                            'AUM_lastamount'        => (float)$last['last_amount'],
+                            'customer_type'         => $cust_type,
+                            'current_AUM'           => (float)$dat->amount,
+                            'days'                  => $diff,
+                            'AUM_current'           => $this->amount_all($dat->investor_id),
                         ];
-                        $aum_prov  = AumProvision::where([['investor_id', $dat->investor_id], ['is_active', 'Yes']])->first();
-                        if (!empty($aum_prov))
-                        {
-                            //update
-                            $key = $aum_prov->investors_aum_id;
-                            $savedata = array_merge($savedata, [
-                                'updated_by'    => (!empty($this->auth_user()))? $this->auth_user()->usercategory_name.':'.$this->auth_user()->id.':'.$this->auth_user()->fullname : '',
-                                'updated_host'  => 'System'
-                            ]);
-                            AumProvision::where([['investors_aum_id', $key]])->update($savedata);
-                        } else {
-                            //insert
-                            $savedata = array_merge($savedata, [
-                                'investor_id'   => $dat->investor_id, 
-                                'created_by'    => (!empty($this->auth_user()))? $this->auth_user()->usercategory_name.':'.$this->auth_user()->id.':'.$this->auth_user()->fullname : '',
-                                'created_host'  => 'System' //$ip,
-                            ]);
-                            AumProvision::create($savedata);
-                        }
-                    } 
+                    }
+
+                    if($cust_type == $request->type)
+                    {
+                        $out[] = [ 
+                            'investor_id'           => $dat->investor_id,
+                            'fullname'              => $dat->fullname,
+                            'cif'                   => $dat->cif,
+                            'target_AUM_date'       => $aum->effective_date,
+                            'target_AUM_amount'     => (float)$aum->target_aum,
+                            'AUM_lastdate'          => $lastdate,
+                            'AUM_lastamount'        => (float)$last['last_amount'],
+                            'customer_type'         => $cust_type,
+                            'current_AUM'           => (float)$dat->amount,
+                            'days'                  => $diff,
+                            'AUM_current'           => $this->amount_all($dat->investor_id),
+                        ];
+                    }
+
+                    //save to DB
+                    $savedata = [
+                        'aum_lastdate'          => $lastdate,
+                        'target_aum_amount'     => (float)$aum->target_aum,
+                        'current_aum_amount'    => (float)$dat->amount,
+                        'is_active'             => 'Yes',
+                    ];
+                    $aum_prov  = AumProvision::where([['investor_id', $dat->investor_id], ['is_active', 'Yes']])->first();
+                    if (!empty($aum_prov))
+                    {
+                        //update
+                        $key = $aum_prov->investors_aum_id;
+                        $savedata = array_merge($savedata, [
+                            'updated_by'    => (!empty($this->auth_user()))? $this->auth_user()->usercategory_name.':'.$this->auth_user()->id.':'.$this->auth_user()->fullname : '',
+                            'updated_host'  => 'System'
+                        ]);
+                        AumProvision::where([['investors_aum_id', $key]])->update($savedata);
+                    } else {
+                        //insert
+                        $savedata = array_merge($savedata, [
+                            'investor_id'   => $dat->investor_id, 
+                            'created_by'    => (!empty($this->auth_user()))? $this->auth_user()->usercategory_name.':'.$this->auth_user()->id.':'.$this->auth_user()->fullname : '',
+                            'created_host'  => 'System' //$ip,
+                        ]);
+                        AumProvision::create($savedata);
+                    }
                 }
             }
         }
@@ -564,8 +578,7 @@ class SalesController extends AppController
             'to'            => $total_data >= $total ? $total : $total_data,
             'total'         => $total
         ];
-        return $this->app_response('investor', $paginate);  
-        // return $this->app_response('investor', $out);     
+        return $this->app_response('investor', $paginate); 
     }
 
     public function get_aum_priority() 

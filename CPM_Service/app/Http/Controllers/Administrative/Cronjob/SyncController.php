@@ -536,9 +536,10 @@ class SyncController extends AppController
 
          $this->initAPI();
          $token = $this->get_token_wms();
-         $sales = User::where([['is_active', 'Yes'],['usercategory_id', '2']])
-                  ->whereNotNull('user_code')
-                  ->orderBy('user_code')         
+         $sales = User::join('u_users_categories as b', 'u_users.usercategory_id', '=', 'b.usercategory_id')
+                  ->where([['u_users.is_active', 'Yes'],['b.usercategory_name', 'Sales']])
+                  ->whereNotNull('u_users.user_code')
+                  ->orderBy('u_users.user_code')         
                   ->get();
          $res = [];
          $detail_update = [];

@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Financial\Planning;
+namespace App\Http\Controllers\Investor\Financial\Planning;
 
 use App\Http\Controllers\AppController;
 use App\Models\Financial\AssetOutstanding;

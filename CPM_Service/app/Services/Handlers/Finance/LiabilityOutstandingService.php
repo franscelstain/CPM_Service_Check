@@ -22,8 +22,24 @@ class LiabilityOutstandingService
     {
         $latestDate = $request->out_date ?? date('Y-m-d');
 
-        $pembiayaan = $this->liabilityRepo->liabilityPembiayaan($investorId, $latestDate);
-        $hasanahCard = $this->liabilityRepo->liabilityHasanahCard($investorId, $latestDate);
+        $pembiayaan = collect($this->liabilityRepo->liabilityPembiayaan($investorId, $latestDate));
+        $hasanahCard = collect($this->liabilityRepo->liabilityHasanahCard($investorId, $latestDate));
+
+        if (!$pembiayaan->isEmpty()) {
+            $pembiayaanLatestDate = $pembiayaan->pluck('data_date')->filter()->max();
+            $pembiayaan = $pembiayaan->map(function ($item) use ($pembiayaanLatestDate) {                
+                $item->latest_data_date = $pembiayaanLatestDate;
+                return $item;
+            });
+        }
+
+        if (!$hasanahCard->isEmpty()) {
+            $hasanahCardLatestDate = $hasanahCard->pluck('data_date')->filter()->max();
+            $hasanahCard = $hasanahCard->map(function ($item) use ($hasanahCardLatestDate) {                
+                $item->latest_data_date = $hasanahCardLatestDate;
+                return $item;
+            });
+        }        
 
         return ['pembiayaan' => $pembiayaan, 'hasanah_card' => $hasanahCard];
     }

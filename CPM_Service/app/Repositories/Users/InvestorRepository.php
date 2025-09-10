@@ -5,6 +5,8 @@ namespace App\Repositories\Users;
 use App\Interfaces\Users\InvestorRepositoryInterface;
 use App\Models\Auth\Investor as AuthInvestor;
 use App\Models\Users\Investor\Investor;
+use Illuminate\Support\Facades\Cache;
+use Carbon\Carbon;
 use Auth;
 use DB;
 use Session;
@@ -12,6 +14,58 @@ use Session;
 
 class InvestorRepository implements InvestorRepositoryInterface
 {
+    public function baseInvestorSales($sales_id)
+    {
+        return DB::table('u_investors as ui')
+                ->where('ui.sales_id', $sales_id)
+                ->where('ui.is_active', 'Yes');
+    }
+
+    public function clearOtpById(int $id)
+    {
+        return Investor::where('investor_id', $id)
+                ->update([
+                    'otp' => null,
+                    'otp_created' => null
+                ]);
+    }
+
+    public function countInvestorsBySales($salesId)
+    {
+        $cacheKey = "investor_count_sales_{$salesId}";
+
+        return Cache::remember($cacheKey, Carbon::now()->addHour(), function () use ($salesId) {
+            return Investor::where('sales_id', $salesId)
+                           ->where('is_active', 'Yes')
+                           ->count();
+        });
+    }    
+
+    public function countInvestorPriority()
+    {
+        return DB::table('u_investors as ui')
+                ->join('u_investors_card_priorities as uicp', 'ui.cif', '=', 'uicp.cif')
+                ->where([['ui.is_active', 'Yes'], ['uicp.is_active', 'Yes']])
+                ->distinct('ui.investor_id') 
+                ->count();
+    }
+
+    public function deactivateInvestorById($invId)
+    {
+        return DB::table('u_investors')
+                ->where('investor_id', $invId)
+                ->where('is_active', 'Yes')
+                ->update(['is_enable' => 'No']);
+    }
+
+    public function deactivateInvestorByEmail(string $email)
+    {
+        return DB::table('u_investors')
+                ->where('email', $email)
+                ->where('is_active', 'Yes')
+                ->update(['is_enable' => 'No']);
+    }
+
     public function detailInvestor($id)
     {
         try
@@ -29,6 +83,15 @@ class InvestorRepository implements InvestorRepositoryInterface
         {
             return (object) ['errors' => ['error_code' => 500, 'error_msg' => $e->getMessage()]];
         }
+    }
+
+    public function detailInvestorBySales($inv_id, $sales_id)
+    {
+        return DB::table('investors as ui')
+                ->where('ui.investor_id', $inv_id)
+                ->where('ui.sales_id', $sales_id)
+                ->where('ui.is_active', 'Yes')
+                ->first();
     }
 
     public function eStatement()
@@ -66,6 +129,61 @@ class InvestorRepository implements InvestorRepositoryInterface
         }
     }
 
+    public function findByEmail(string $email) {
+        return DB::table('u_investors as ui')
+                ->where('ui.email', $email)
+                ->where('ui.is_active', 'Yes')
+                ->first();
+    }
+
+    public function findByIdWithOtp(string $investorId, string $otp) {
+        return DB::table('u_investors as ui')
+                ->where('ui.investor_id', $investorId)
+                ->where('ui.otp', $otp)
+                ->where('ui.is_active', 'Yes')
+                ->first();
+    }
+
+    public function getInvestorsBySalesWithPagination($salesId, $search = '', $start = 0, $length = 10, $colName = 'fullname', $colSort = 'asc')
+    {
+        $query = Investor::where('u_investors.sales_id', $salesId)->where('u_investors.is_active', 'Yes');
+
+        // Kondisi tambahan jika ada pencarian
+        if (!empty($search)) {
+            $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
+            $query->where(function ($qry) use ($search, $like) {
+                $qry->where('u_investors.fullname', $like, '%' . $search . '%')
+                    ->orWhere('u_investors.cif', $like, '%' . $search . '%');
+            });
+        }
+
+        return $query->orderBy($colName, $colSort)
+                    ->skip($start)
+                    ->take($length)
+                    ->get();
+    }
+
+    public function investorForSales($salesId, $search, $limit, $page, $colName, $colSort)
+    {
+        $query = DB::table('u_investors as ui')
+                ->where([['ui.is_active', 'Yes'], ['ui.sales_id', $salesId]]);
+
+        if (!empty($search)) {
+            $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
+            $query->where(function($qry) use ($search, $like) {
+                $qry->where('ui.fullname', $like, '%'. $search .'%')
+                    ->orWhere('ui.cif', $like, '%'. $search .'%');
+            });
+        }
+            
+        if (!empty($colName) && !empty($colSort)) {
+            $query->orderBy($colName, $colSort);
+        }
+
+        return $query->select('ui.cif', 'ui.fullname')
+                    ->paginate($limit, ['*'], 'page', $page);
+    }
+
     public function listInvestor($request)
     {
         try
@@ -84,14 +202,10 @@ class InvestorRepository implements InvestorRepositoryInterface
                 $sql = $this->listInvestorForAdmin($search);
             elseif ($request->dest == 'assets-liabilities')
                 $sql = $this->listInvestorForAssetsLiabilities($search, $offset, $limit, $colName, $colSort);
-            elseif ($request->dest == 'drop-fund')
-                $sql = $this->listInvestorForDropFund($search, $offset, $limit, $colName, $colSort);
             elseif ($request->dest == 'income-expense')
                 $sql = $this->listInvestorForIncomeExpense($search, $offset, $limit, $colName, $colSort);
             elseif ($request->dest == 'portfolio-current')
                 $sql = $this->listInvestorForPortfolioCurrent($search, $offset, $limit, $colName, $colSort);
-            elseif ($request->dest == 'portfolio-goals')
-                $sql = $this->listInvestorForPortfolioGoals($search, $offset, $limit, $colName, $colSort);
             elseif ($request->dest == 'report')
                 $sql = $this->listInvestorForReport($search);
             elseif ($request->dest == 'sales')
@@ -99,12 +213,10 @@ class InvestorRepository implements InvestorRepositoryInterface
 
             if (isset($sql) && empty($sql->errors))
             {
-                if (!empty($sql->item))
-                {
+                if (isset($sql->item)) {
                     $items = $sql->item;
                 }
-                else
-                {
+                else {
                     $investors = $sql->query;
 
                     if (!empty($colName))
@@ -115,7 +227,7 @@ class InvestorRepository implements InvestorRepositoryInterface
                 
                 $totalFiltered = $sql->totalFiltered;
                 $total = $sql->total;
-            }            
+            }
             
             return [
                 'draw' => $request->draw ?? 1,
@@ -165,29 +277,36 @@ class InvestorRepository implements InvestorRepositoryInterface
     {
         try
         {
-            $auth   = Auth::guard('admin')->user();
-            $userId = $auth->id ?? '';
-            $query  = DB::table('u_investors as ui')
-                    ->where([['ui.is_active', 'Yes'], ['ui.sales_id', $userId]])
-                    ->select('ui.investor_id', 'ui.fullname', 'ui.photo_profile', 'ui.cif');
-            $total  = $query->count();
-
-            if (!empty($query))
+            $auth       = Auth::guard('admin')->user();
+            $userId     = $auth->id ?? '';
+            $page       = $length > 0 ? $start / $length + 1 : 1;
+            $subquery   = DB::table('u_investors as ui')
+                        ->where([['ui.is_active', 'Yes'], ['ui.sales_id', $userId]])
+                        ->select('ui.investor_id', 'ui.fullname', 'ui.photo_profile', 'ui.cif');
+            $total      = $subquery->count();            
+            $like       = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
+            $investors  = $subquery->when(!empty($search), function ($query) use ($search, $like) {
+                            $query->where(function ($q) use ($search, $like) {
+                                $q->where('ui.cif', $like, "%$search%")
+                                ->orWhere('ui.fullname', $like, "%$search%");
+                            });
+                        })                
+                        ->when(!empty($colName) && !empty($colSort), function ($q) use ($colName, $colSort) {
+                            $q->orderBy($colName, $colSort);
+                        })                    
+                        ->paginate($length, ['*'], 'page', $page);
+            $totFilter  = !empty($search) ? $investors->count() : $total;
+            
+            if ($investors->isEmpty())
             {
-                $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
-                $query->where(function($qry) use ($search, $like) {
-                    $qry->where('ui.fullname', $like, '%'. $search .'%')
-                        ->orWhere('ui.cif', $like, '%'. $search .'%');
-                });
-                $totFilter = $query->count();
+                return (object) [
+                    'item' => [],
+                    'total' => $total,
+                    'totalFiltered' => $totFilter ?? $total
+                ];
             }
 
-            if (!empty($colName))
-                $query->orderBy($colName, $colSort);
-
-            $investors = $query->skip($start)->take($length)->get();
-            
-            $investorIds = $investors->pluck('investor_id');
+            $investorIds = $investors->pluck('investor_id')->toArray();
             
             $assets = DB::table('t_assets_liabilities as tal')
                     ->join('m_financials as mf', 'tal.financial_id', '=', 'mf.financial_id')
@@ -197,15 +316,40 @@ class InvestorRepository implements InvestorRepositoryInterface
                     ->where('mf.financial_type', 'Assets')
                     ->select('tal.investor_id', DB::raw('SUM(tal.amount) as total_assets'))
                     ->groupBy('tal.investor_id')
-                    ->get();
+                    ->get()
+                    ->keyBy('investor_id');
 
-            $outstandingAmounts = DB::table('t_assets_outstanding as ao')
-                ->whereIn('ao.investor_id', $investorIds)
-                ->where('ao.outstanding_date', DB::raw('CURRENT_DATE'))
-                ->where('ao.is_active', 'Yes')
-                ->select('ao.investor_id', DB::raw('SUM(ao.balance_amount) as total_amount'))
-                ->groupBy('ao.investor_id')
-                ->get();
+            $subOut = DB::table('t_assets_outstanding as tao')
+                    ->selectRaw('DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                        tao.investor_id,
+                        tao.balance_amount
+                    ')
+                    ->join('u_investors as ui', 'tao.investor_id', '=', 'ui.investor_id')
+                    ->join('m_products as mp', 'mp.product_id', '=', 'tao.product_id')
+                    ->join('m_asset_class as mac', 'mac.asset_class_id', '=', 'mp.asset_class_id')
+                    ->join('m_asset_categories as mact', 'mact.asset_category_id', '=', 'mac.asset_category_id')
+                    ->whereIn('tao.investor_id', $investorIds)
+                    ->where('tao.outstanding_date', DB::raw('CURRENT_DATE'))
+                    ->where('tao.is_active', 'Yes')
+                    ->where('ui.is_active', 'Yes')
+                    ->where('mp.is_active', 'Yes')
+                    ->where('mac.is_active', 'Yes')
+                    ->where('mact.is_active', 'Yes')
+                    ->orderBy('tao.investor_id')
+                    ->orderBy('tao.account_no')
+                    ->orderBy('tao.product_id')
+                    ->orderByDesc('tao.data_date')
+                    ->orderByDesc('tao.outstanding_id');            
+            
+            $outstandingAmounts = DB::table(DB::raw("({$subOut->toSql()}) as a"))
+                ->mergeBindings($subOut)
+                ->select(
+                    'investor_id',
+                    DB::raw('SUM(balance_amount) as total_amount')
+                )
+                ->groupBy('investor_id')
+                ->get()
+                ->keyBy('investor_id');
             
             $liabilities = DB::table('t_assets_liabilities as tal')
                 ->join('m_financials as mf', 'tal.financial_id', '=', 'mf.financial_id')
@@ -215,56 +359,60 @@ class InvestorRepository implements InvestorRepositoryInterface
                 ->where('mf.financial_type', 'Liabilities')
                 ->select('tal.investor_id', DB::raw('SUM(tal.amount) as total_liabilities'))
                 ->groupBy('tal.investor_id')
-                ->get();
+                ->get()
+                ->keyBy('investor_id');            
 
-            $latestLiabilityOutstanding = DB::table('t_liabilities_outstanding')
-                ->where('is_active', 'Yes')
-                ->select('investor_id', DB::raw('MAX(outstanding_date) as latest_date'))
-                ->groupBy('investor_id');
+            $subLiab = DB::table('t_liabilities_outstanding as tlo')
+                        ->join('u_investors as ui', 'tlo.investor_id', '=', 'ui.investor_id')
+                        ->whereIn('tlo.investor_id', $investorIds)
+                        ->where('tlo.outstanding_date', DB::raw('CURRENT_DATE'))
+                        ->where('tlo.is_active', 'Yes')
+                        ->where('ui.is_active', 'Yes')
+                        ->selectRaw('DISTINCT ON (tlo.investor_id, tlo.liabilities_id)
+                            tlo.investor_id,
+                            tlo.outstanding_balance
+                        ')
+                        ->orderBy('tlo.investor_id')
+                        ->orderBy('tlo.liabilities_id')
+                        ->orderByDesc('tlo.data_date')
+                        ->orderByDesc('tlo.liabilities_outstanding_id');
 
-            $liabilitiesAmounts = DB::table('t_liabilities_outstanding as lo')
-                ->whereIn('lo.investor_id', $investorIds)
-                ->where('lo.outstanding_date', DB::raw('CURRENT_DATE'))
-                ->where('lo.is_active', 'Yes')
-                ->select('lo.investor_id', DB::raw('SUM(lo.outstanding_balance) as total_amount'))
-                ->groupBy('lo.investor_id')
-                ->get();
+            $liabilitiesAmounts = DB::table(DB::raw("({$subLiab->toSql()}) as a"))
+                ->mergeBindings($subLiab)
+                ->select(
+                    'investor_id',
+                    DB::raw('SUM(outstanding_balance) as total_amount')
+                )
+                ->groupBy('investor_id')
+                ->get()
+                ->keyBy('investor_id');
 
             $data = $investors->map(function ($investor) use ($assets, $outstandingAmounts, $liabilities, $liabilitiesAmounts) {
-                $assetAmount        = $assets->where('investor_id', $investor->investor_id)->first()->total_assets ?? null;
-                $latestAssetAmount  = $outstandingAmounts->where('investor_id', $investor->investor_id)->first()->total_amount ?? null;
+                $assetAmount        = $assets->get($investor->investor_id)->total_assets ?? null;
+                $latestAssetAmount  = $outstandingAmounts->get($investor->investor_id)->total_amount ?? null;
                 
-                if ($assetAmount == null && $latestAssetAmount == null)
-                {
+                if ($assetAmount == null && $latestAssetAmount == null) {
                     $totalAssets = null;
-                }
-                else
-                {
+                } else {
                     $assetAmount = $assetAmount ?? 0;
                     $latestAssetAmount = $latestAssetAmount ?? 0;
                     $totalAssets = $assetAmount + $latestAssetAmount;
                 }
     
-                $liabilityAmount        = $liabilities->where('investor_id', $investor->investor_id)->first()->total_liabilities ?? 0;
-                $latestLiabilityAmount  = $liabilitiesAmounts->where('investor_id', $investor->investor_id)->first()->total_amount ?? 0;
+                $liabilityAmount        = $liabilities->get($investor->investor_id)->total_liabilities ?? 0;
+                $latestLiabilityAmount  = $liabilitiesAmounts->get($investor->investor_id)->total_amount ?? 0;
                 
-                if ($liabilityAmount == null && $latestLiabilityAmount == null)
-                {
+                if ($liabilityAmount == null && $latestLiabilityAmount == null) {
                     $totalLiabilities = null;
-                }
-                else
-                {
+                } else {
                     $liabilityAmount = $liabilityAmount ?? 0;
                     $latestLiabilityAmount = $latestLiabilityAmount ?? 0;
                     $totalLiabilities = $liabilityAmount + $latestLiabilityAmount;
                 }
 
-                if ($totalAssets == null && $totalLiabilities == null)
-                {
+                if ($totalAssets == null && $totalLiabilities == null) {
                     $networth = $status = null;
-                }
-                else
-                {
+                } else {
                     $totalAssets = $totalAssets ?? 0;
                     $totalLiabilities = $totalLiabilities ?? 0;
                     $networth = $totalAssets - $totalLiabilities;
@@ -284,72 +432,14 @@ class InvestorRepository implements InvestorRepositoryInterface
             return (object) [
                 'item' => $data,
                 'total' => $total,
-                'totalFiltered' => $totFilter ?? $total
+                'totalFiltered' => $totFilter ?? $total,
+                'start' => $start
             ];
-        }
-        catch (\Exception $e)
-        {
-            return (object) ['errors' => ['error_code' => 500, 'error_msg' => $e->getMessage()]];
-        }   
-    }
-
-    private function listInvestorForDropFund($search, $start, $length, $colName, $colSort)
-    {
-        try
-        {
-            $auth   = Auth::guard('admin')->user();
-            $userId = $auth->id ?? '';
-            $query  = DB::table('u_investors as ui')
-                    ->join('u_users as uu', 'ui.sales_id', '=', 'uu.user_id')
-                    ->where([['ui.sales_id', $userId], ['ui.is_active', 'Yes'], ['uu.is_active', 'Yes']])                    
-                    ->whereIn('ui.cif', function($qry) use ($search) {
-                        $qry->select('icp.cif')
-                            ->from('u_investors_card_priorities as icp')
-                            ->where('icp.is_active', 'Yes');
-                    })
-                    ->select('ui.investor_id', 'ui.fullname', 'ui.cif', 'uu.fullname as sales_name');
-            $total  = $query->count();
-
-            if (!empty($query))
-            {
-                $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
-                $query->where(function($qry) use ($search, $like) {
-                            $qry->where('ui.fullname', $like, '%'. $search .'%')
-                            ->orWhere('ui.cif', $like, '%'. $search .'%');
-                        });
-                $totFilter = $query->count();
-            }
-
-            if (!empty($colName))
-                $query->orderBy($colName, $colSort);
-
-            $investors = $query->skip($start)->take($length)->get();
-
-            $cif = $investors->pluck('cif');
-
-            $card = DB::table('u_investors_card_priorities as uicp')
-                    ->whereIn('uicp.cif', $cif)
-                    ->where('uicp.is_active', 'Yes')
-                    ->get();
-
-            $data = $investors->map(function ($investor) use ($card)
-            {
-                $cardPriority = $card->where('cif', $investor->cif)->first();
-                $dropDate = !empty($cardPriority->created_at) || !empty($cardPriority->updated_at) ? !empty($cardPriority->created_at) ? $cardPriority->created_at : $cardPriority->updated_at : null;
-                $investor->drop_date = !empty($dropDate) ? date('d/m/Y', strtotime($dropDate)) : null;
-                $investor->customer_type = $cardPriority && $cardPriority->is_priority && $cardPriority->pre_approve ? 'Priority' : 'Non Priority';
-                $investor->user_status = 'Non Active';
-                return $investor;
-            });
-
-            return (object) [
-                'item' => $data,
-                'total' => $total,
-                'totalFiltered' => $totFilter ?? $total
-            ];
-        }
-        catch (\Exception $e)
-        {
+        } catch (\Exception $e) {
+            \Log::error('Error in listInvestorForAssetsLiabilities: ' . $e->getMessage(), [
+                'exception' => $e,
+                'stack_trace' => $e->getTraceAsString(),
+            ]);
             return (object) ['errors' => ['error_code' => 500, 'error_msg' => $e->getMessage()]];
         }   
     }
@@ -360,79 +450,69 @@ class InvestorRepository implements InvestorRepositoryInterface
         {
             $auth   = Auth::guard('admin')->user();
             $userId = $auth->id ?? '';
-            $query  = DB::table('u_investors as ui')
+
+            $sortable = ['fullname', 'cif'];
+            $colName  = in_array($colName, $sortable, true) ? $colName : 'fullname';
+            $colSort  = strtolower($colSort) === 'desc' ? 'desc' : 'asc';
+
+            $base  = DB::table('u_investors as ui')
                     ->where([['ui.is_active', 'Yes'], ['ui.sales_id', $userId]])
                     ->select('ui.investor_id', 'ui.fullname', 'ui.photo_profile', 'ui.cif');
-            $total  = $query->count();
+            // $total  = $query->count();
+            $total = (clone $base)->count();
 
-            if (!empty($search))
-            {
-                $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
-                $query->where(function($qry) use ($search, $like) {
-                    $qry->where('ui.fullname', $like, '%'. $search .'%')
-                        ->orWhere('ui.cif', $like, '%'. $search .'%');
+            $agg = DB::table('t_income_expense as tie')
+                ->join('m_financials as mf', 'tie.financial_id', '=', 'mf.financial_id')
+                ->where('tie.is_active', 'Yes')
+                ->where('mf.is_active', 'Yes')
+                ->select([
+                    'tie.investor_id',
+                    DB::raw("SUM(CASE WHEN mf.financial_type = 'Income'
+                                    THEN CASE WHEN tie.period_of_time = 'Yearly' THEN tie.amount ELSE tie.amount * 12 END
+                                    ELSE 0 END) AS total_income"),
+                    DB::raw("SUM(CASE WHEN mf.financial_type = 'Expense'
+                                    THEN CASE WHEN tie.period_of_time = 'Yearly' THEN tie.amount ELSE tie.amount * 12 END
+                                    ELSE 0 END) AS total_expense"),
+                ])
+                ->groupBy('tie.investor_id');
+
+            $filtered = (clone $base)
+                ->leftJoinSub($agg, 'fx', 'fx.investor_id', '=', 'ui.investor_id')
+                ->when(!empty($search), function ($q) use ($search) {
+                    $like = env('DB_CONNECTION') === 'pgsql' ? 'ilike' : 'like';
+                    $q->where(function ($qq) use ($search, $like) {
+                        $qq->where('ui.fullname', $like, "%{$search}%")
+                        ->orWhere('ui.cif', $like, "%{$search}%");
+                    });
                 });
-                $totFilter = $query->count();
-            }
-            
-            $investors = $query->skip($start)->take($length)->get();
-            
-            $investorIds = $investors->pluck('investor_id');
-            
-            $income = DB::table('t_income_expense as tie')
-                    ->join('m_financials as mf', 'tie.financial_id', '=', 'mf.financial_id')
-                    ->whereIn('tie.investor_id', $investorIds)
-                    ->where('tie.is_active', 'Yes')
-                    ->where('mf.is_active', 'Yes')
-                    ->where('mf.financial_type', 'Income')
-                    ->select('tie.investor_id', DB::raw("SUM(CASE WHEN tie.period_of_time = 'Yearly' THEN tie.amount ELSE tie.amount * 12 END) as total_income"))
-                    ->groupBy('tie.investor_id')
-                    ->get();
 
-            $expense = DB::table('t_income_expense as tie')
-                    ->join('m_financials as mf', 'tie.financial_id', '=', 'mf.financial_id')
-                    ->whereIn('tie.investor_id', $investorIds)
-                    ->where('tie.is_active', 'Yes')
-                    ->where('mf.is_active', 'Yes')
-                    ->where('mf.financial_type', 'Expense')
-                    ->select('tie.investor_id', DB::raw("SUM(CASE WHEN tie.period_of_time = 'Yearly' THEN tie.amount ELSE tie.amount * 12 END) as total_expense"))
-                    ->groupBy('tie.investor_id')
-                    ->get();
+            $totFilter = (clone $filtered)->count();
 
-            $data = $investors->map(function ($investor) use ($income, $expense) {
-                $incomeAmount = $income->where('investor_id', $investor->investor_id)->first()->total_income ?? null;
-                $expenseAmount = $expense->where('investor_id', $investor->investor_id)->first()->total_expense ?? null;
-                
-                if ($incomeAmount == null && $expenseAmount == null)
-                {
-                    $cashflow = $status = null;
-                }
-                else
-                {
-                    $incomeAmount = $incomeAmount ?? 0;
-                    $expenseAmount = $expenseAmount ?? 0;
-                    $cashflow = $incomeAmount - $expenseAmount;
-                    $status = $cashflow >= 0 ? 'Good' : 'Bad';
-                }
-    
-                return [
-                    'investor_id' => $investor->investor_id,
-                    'cif' => $investor->cif,
-                    'fullname' => $investor->fullname,
-                    'photo_profile' => $investor->photo_profile,
-                    'cashflow' => $cashflow,
-                    'status' => $status
-                ];
-            });
+            $rows = $filtered
+                ->select([
+                    'ui.investor_id',
+                    'ui.cif',
+                    'ui.fullname',
+                    'ui.photo_profile',
+                    DB::raw("CASE 
+                                WHEN fx.total_income IS NULL AND fx.total_expense IS NULL THEN NULL
+                                WHEN (fx.total_income - fx.total_expense) >= 0 THEN 'Good'
+                                ELSE 'Bad'
+                            END AS status"),
+                    DB::raw("(fx.total_income - fx.total_expense) AS cashflow"),
+                ])
+                ->orderBy($colName, $colSort)
+                ->offset($start)
+                ->limit($length)
+                ->get();
             
             return (object) [
-                'item' => $data,
+                'item' => $rows,
                 'total' => $total,
-                'totalFiltered' => $totFilter ?? $total
+                'totalFiltered' => $totFilter
             ];
         }
-        catch (\Exception $e)
-        {
+        catch (\Exception $e) {
             return (object) ['errors' => ['error_code' => 500, 'error_msg' => $e->getMessage()]];
         }   
     }
@@ -500,66 +580,6 @@ class InvestorRepository implements InvestorRepositoryInterface
         }
     }
 
-    private function listInvestorForPortfolioGoals($search, $start, $length, $colName, $colSort)
-    {
-        try
-        {
-            $auth       = Auth::guard('admin')->user();
-            $userId     = $auth->id ?? '';
-            $query      = DB::table('u_investors as ui')
-                        ->leftJoin('m_risk_profiles as rp', function($qry) { $qry->on('rp.profile_id', 'ui.profile_id')->where('rp.is_active', 'Yes'); })
-                        ->where([['ui.is_active', 'Yes'], ['ui.sales_id', $userId]])
-                        ->select('ui.investor_id', 'ui.fullname', 'ui.sid', 'ui.photo_profile', 'ui.cif', 'rp.profile_name',
-                                 'ui.profile_expired_date');
-            $total      = $query->count();
-
-            if (!empty($search))
-            {
-                $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
-                $query->where(function($qry) use ($search, $like) {
-                    $qry->where('ui.fullname', $like, '%'. $search .'%')
-                        ->orWhere('ui.sid', $like, '%'. $search .'%')
-                        ->orWhere('ui.cif', $like, '%'. $search .'%')
-                        ->orWhere('rp.profile_name', $like, '%'. $search .'%');
-                    
-                    if (strtotime($search)) {
-                        $searchDate = date('Y-m-d', strtotime(str_replace('/', '-', $search)));
-                        $qry->orWhereDate('ui.profile_expired_date', $searchDate);
-                    }
-                }); 
-                $totFilter = $query->count();               
-            }
-
-            $investor = $query->skip($start)->take($length)->get();
-
-            $investorIds = $investor->pluck('investor_id');
-
-            $historyGoals =  DB::table('t_trans_histories_days as thd')
-                ->whereIn('thd.investor_id', $investorIds)
-                ->whereDate('thd.history_date', DB::raw('CURRENT_DATE'))
-                ->where([['thd.is_active', 'Yes'], [DB::raw("LEFT(thd.portfolio_id, 1)"), '2']])
-                ->select('thd.investor_id', DB::raw("SUM(thd.current_balance) AS balance"))
-                ->groupBy('thd.investor_id')
-                ->get();
-
-            $data = $investor->map(function ($investor) use ($historyGoals) {
-                $balanceGoals = $historyGoals->where('investor_id', $investor->investor_id)->first()->balance ?? null;
-                $investor->balance_goals = $balanceGoals;
-                return $investor;
-            });                    
-
-            return (object) [
-                'item' => $data,
-                'total' => $total,
-                'totalFiltered' => $totFilter ?? $total
-            ];
-        }
-        catch (\Exception $e)
-        {
-            return (object) ['errors' => ['error_code' => 500, 'error_msg' => $e->getMessage()]];
-        }
-    }
-
     private function listInvestorForReport($search)
     {
         try
@@ -606,74 +626,263 @@ class InvestorRepository implements InvestorRepositoryInterface
     {
         try
         {
-            $auth       = Auth::guard('admin')->user();
-            $userId     = $auth->id ?? '';
-            $query      = DB::table('u_investors as ui')
-                        ->leftJoin('m_risk_profiles as rp', function($qry) { $qry->on('rp.profile_id', 'ui.profile_id')->where('rp.is_active', 'Yes'); })
-                        ->where([['ui.is_active', 'Yes'], ['ui.sales_id', $userId]])
-                        ->select('ui.investor_id', 'ui.fullname', 'ui.sid', 'ui.photo_profile', 'ui.cif', 'rp.profile_name',
-                                 'ui.profile_expired_date');
-            $total      = $query->count();
+            $auth = Auth::guard('admin')->user();
+            $userId = $auth->id ?? '';
+            $sortable = [ 'fullname','cif','sid','profile_name','profile_expired_date' ]; 
+            $colName = in_array($colName, $sortable, true) ? $colName : 'fullname'; 
+            $colSort = strtolower($colSort) === 'desc' ? 'desc' : 'asc';
 
-            if (!empty($search))
-            {
-                $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
-                $query->where(function($qry) use ($search, $like) {
-                    $qry->where('ui.fullname', $like, '%'. $search .'%')
-                        ->orWhere('ui.sid', $like, '%'. $search .'%')
-                        ->orWhere('ui.cif', $like, '%'. $search .'%')
-                        ->orWhere('rp.profile_name', $like, '%'. $search .'%');
-                    
-                    if (strtotime($search)) {
-                        $searchDate = date('Y-m-d', strtotime(str_replace('/', '-', $search)));
-                        $qry->orWhereDate('ui.profile_expired_date', $searchDate);
-                    }
-                });                
-                $totFilter = $query->count();
-            }
+            $dateToday = date('Y-m-d'); 
             
-            $investors = $query->skip($start)->take($length)->get();
+            $qGoals = DB::table('t_trans_histories_days as thd') 
+                    ->select(
+                        'thd.investor_id', 
+                        DB::raw('SUM(thd.current_balance) AS balance_goals')
+                    ) 
+                    ->where('thd.is_active', 'Yes') 
+                    ->where('thd.portfolio_type', 'Goal') 
+                    ->whereRaw("CAST(thd.history_date AS DATE) = ?", [$dateToday]) 
+                    ->groupBy('thd.investor_id'); 
+            
+            $latestRN = DB::query()
+                    ->fromSub(
+                        DB::table('t_assets_outstanding as tao') 
+                        ->where('tao.is_active', 'Yes') 
+                        ->whereRaw("CAST(tao.outstanding_date AS DATE) = ?", [$dateToday]) 
+                        ->selectRaw(" 
+                            tao.investor_id, 
+                            tao.account_no, 
+                            tao.product_id, 
+                            tao.balance_amount, 
+                            ROW_NUMBER() OVER ( 
+                                PARTITION BY tao.investor_id, tao.account_no, tao.product_id 
+                                ORDER BY tao.data_date DESC, tao.outstanding_id DESC 
+                            ) AS rn 
+                        "), 
+                        't'
+                    )
+                    ->where('t.rn', 1);
 
-            $investorIds = $investors->pluck('investor_id');
+            $qNonGoals = DB::query()
+                        ->fromSub($latestRN, 'x')
+                        ->select(
+                            'x.investor_id', 
+                            DB::raw('SUM(x.balance_amount) AS balance_non_goals')
+                        )
+                        ->groupBy('x.investor_id');
+            
+            $base = DB::table('u_investors as ui')
+                    ->leftJoin('m_risk_profiles as rp', function ($join) { 
+                        $join->on('rp.profile_id', '=', 'ui.profile_id') 
+                            ->where('rp.is_active', 'Yes');
+                    })
+                    ->leftJoinSub($qGoals, 'g', 'g.investor_id', '=', 'ui.investor_id')
+                    ->leftJoinSub($qNonGoals, 'ng', 'ng.investor_id', '=', 'ui.investor_id')
+                    ->where('ui.is_active', 'Yes')
+                    ->where('ui.sales_id', $userId); 
+            
+            $total = (clone $base)->count();
 
-            $historyGoals =  DB::table('t_trans_histories_days as thd')
-                ->whereIn('thd.investor_id', $investorIds)
-                ->whereDate('thd.history_date', DB::raw('CURRENT_DATE'))
-                ->where([['thd.is_active', 'Yes'], [DB::raw("LEFT(thd.portfolio_id, 1)"), '2']])
-                ->select('thd.investor_id', DB::raw("SUM(thd.current_balance) AS balance"))
-                ->groupBy('thd.investor_id')
-                ->get();
-
-            $historyNonGoals =  DB::table('t_trans_histories_days as thd')
-                ->whereIn('thd.investor_id', $investorIds)
-                ->whereDate('thd.history_date', DB::raw('CURRENT_DATE'))
-                ->where('thd.is_active', 'Yes')
-                ->where(function($qry) {
-                    $qry->whereRaw("LEFT(thd.portfolio_id, 1) NOT IN ('2', '3')")
-                        ->orWhereNull('thd.portfolio_id');
-                })
-                ->select('thd.investor_id', DB::raw("SUM(thd.current_balance) AS balance"))
-                ->groupBy('thd.investor_id')
-                ->get();
-                
-            $data = $investors->map(function ($investor) use ($historyGoals, $historyNonGoals) {
-                $balanceGoals = $historyGoals->where('investor_id', $investor->investor_id)->first()->balance ?? null;
-                $balanceNonGoals = $historyNonGoals->where('investor_id', $investor->investor_id)->first()->balance ?? null;
-                $investor->balance_goals = $balanceGoals;
-                $investor->balance_non_goals = $balanceNonGoals;
-                return $investor;
-            });
+            if (!empty($search)) { 
+                $s = strtolower(str_replace('/', '-', $search)); 
+                $like = env('DB_CONNECTION') == 'pgsql' ? 'ILIKE' : 'LIKE'; 
+                $base->where(function ($q) use ($s, $like) { 
+                    $q->whereRaw("ui.fullname {$like} ?", ["%{$s}%"])
+                        ->orWhereRaw("ui.sid {$like} ?", ["%{$s}%"])
+                        ->orWhereRaw("ui.cif {$like} ?", ["%{$s}%"])
+                        ->orWhereRaw("rp.profile_name {$like} ?", ["%{$s}%"]); 
+                        
+                    if (strtotime($s)) { 
+                        $d = date('Y-m-d', strtotime($s)); 
+                        $q->orWhereRaw("CAST(ui.profile_expired_date AS DATE) = ?", [$d]); 
+                    } 
+                }); 
+            } 
+            
+            $totalFiltered = (clone $base)->count();
+            
+            $query = (clone $base)
+                    ->select([ 
+                        'ui.investor_id', 
+                        'ui.fullname', 
+                        'ui.sid', 
+                        'ui.photo_profile', 
+                        'ui.cif', 
+                        'rp.profile_name', 
+                        'ui.profile_expired_date', 
+                        DB::raw('g.balance_goals'), 
+                        DB::raw('
+                            CASE 
+                                WHEN g.balance_goals IS NOT NULL AND 
+                                    ng.balance_non_goals IS NOT NULL 
+                                    THEN ng.balance_non_goals - g.balance_goals 
+                                ELSE ng.balance_non_goals END AS balance_non_goals
+                        ')
+                    ]); 
+            
+            $rows = $query->orderBy($colName, $colSort)
+                    ->offset($start)
+                    ->limit($length)
+                    ->get();
                     
             return (object) [
-                'item' => $data,
+                'item' => $rows,
                 'total' => $total,
-                'totalFiltered' => $totFilter ?? $total
-            ];            
+                'totalFiltered' => $totalFiltered
+            ];           
         }
         catch (\Exception $e)
         {
+            \Log::error('Error in listInvestorForSales: ' . $e->getMessage(), [
+                'exception' => $e,
+                'stack_trace' => $e->getTraceAsString(),
+            ]);
             return (object) ['errors' => ['error_code' => 500, 'error_msg' => $e->getMessage()]];
         }
+    }
+
+    public function listPriorityCard($search, $limit = 10, $page = 1, $colName = 'fullname', $colSort = 'asc')
+    {
+        $query   = DB::table('u_investors as ui')
+                ->join('u_investors_card_priorities as uicp', 'ui.cif', '=', 'uicp.cif')
+                ->where([['ui.is_active', 'Yes'], ['uicp.is_active', 'Yes']]);
+
+        if (!empty($search)) {
+            $like = env('DB_CONNECTION') === 'pgsql' ? 'ilike' : 'like';
+            $query->where(function($qry) use ($search, $like) {
+                $qry->where('ui.fullname', $like, '%' . $search . '%');
+            });
+        }
+
+        $sub = $query->select(
+                    'ui.investor_id', 'ui.fullname', 
+                    DB::raw("CASE WHEN uicp.is_priority IS TRUE THEN 'Priority' ELSE 'Non Priority' END category"),
+                    DB::raw("CASE WHEN uicp.pre_approve IS TRUE THEN 'Yes' ELSE 'No' END pre_approve")
+                    )
+                ->distinct();
+
+        return DB::table(DB::raw("({$sub->toSql()}) as sub"))
+            ->mergeBindings($sub)
+            ->orderBy($colName, $colSort)
+            ->paginate($limit, ['*'], 'page', $page);
+    }
+
+    public function listWithBalanceForSales($salesId, $search, $limit, $page, $colName, $colSort)
+    {
+        $connection = env('DB_CONNECTION');
+        $query = DB::table('u_investors as ui')
+                ->leftJoin('m_risk_profiles as rp', function($join) { 
+                    $join->on('rp.profile_id', 'ui.profile_id')
+                        ->where('rp.is_active', 'Yes');
+                })
+                ->where([['ui.is_active', 'Yes'], ['ui.sales_id', $salesId]]);
+        
+        if (!empty($search)) {
+            $like = $connection === 'pgsql' ? 'ilike' : 'like';
+            $query->where(function($qry) use ($search, $like) {
+                $qry->where('ui.fullname', $like, '%'. $search .'%')
+                    ->orWhere('ui.sid', $like, '%'. $search .'%')
+                    ->orWhere('ui.cif', $like, '%'. $search .'%')
+                    ->orWhere('rp.profile_name', $like, '%'. $search .'%')
+                    ->orWhere('ui.profile_expired_date', $like, '%'. $search .'%');
+            });
+        }
+
+        // Subquery to calculate balance_goals
+        $balanceGoalsSubquery = DB::table('t_trans_histories_days as thd')
+            ->select('thd.investor_id', DB::raw("SUM(thd.current_balance) AS balance_goals"))
+            ->whereDate('thd.history_date', DB::raw('CURRENT_DATE'))
+            ->where([['thd.is_active', 'Yes'], [DB::raw("LEFT(thd.portfolio_id, 1)"), '2']])
+            ->groupBy('thd.investor_id');
+        
+        // Subquery for balance_non_goals
+        $balanceNonGoalsSubquery = DB::table('t_trans_histories_days as thd')
+            ->select('thd.investor_id', DB::raw("SUM(thd.current_balance) AS balance_non_goals"))
+            ->whereDate('thd.history_date', DB::raw('CURRENT_DATE'))
+            ->where('thd.is_active', 'Yes')
+            ->where(function ($qry) {
+                $qry->whereRaw("LEFT(thd.portfolio_id, 1) NOT IN ('2', '3')")
+                    ->orWhereNull('thd.portfolio_id');
+            })
+            ->groupBy('thd.investor_id');
+
+        // Join the subquery to add balance_goals as a column
+        $query->leftJoinSub($balanceGoalsSubquery, 'goals', 'goals.investor_id', '=', 'ui.investor_id')
+            ->leftJoinSub($balanceNonGoalsSubquery, 'non_goals', 'non_goals.investor_id', '=', 'ui.investor_id');
+
+        if (!empty($colName)) {
+            $defaultSort = $colName === 'profile_expired_date' ? "'1970-01-01'" : "''";
+            switch ($colName) {
+                case 'profile_expired_date':
+                    $defaultSort = "'1970-01-01'";
+                    break;
+                case 'balance_goals':
+                    $defaultSort = 0;
+                    break;
+                case 'balance_non_goals':
+                    $defaultSort = 0;
+                    break;
+                default:
+                    $defaultSort = "''";
+                    break;
+            }
+
+            if ($connection === 'pgsql') {
+                $query->orderByRaw("COALESCE($colName, $defaultSort) $colSort");
+            } else {
+                $query->orderByRaw("IFNULL($colName, $defaultSort) $colSort");
+            }
+        }
+
+
+        return $query->select(
+                    'ui.investor_id', 
+                    'ui.fullname', 
+                    'ui.sid', 
+                    'ui.photo_profile', 
+                    'ui.cif', 
+                    'rp.profile_name',
+                    'ui.profile_expired_date',
+                    'goals.balance_goals',
+                    'non_goals.balance_non_goals'
+                )
+                ->paginate($limit, ['*'], 'page', $page);
+
+    }
+
+    public function listWithGoalsForSales($query, $search, $limit, $page, $colName, $colSort)
+    {
+        $query->leftJoin('m_risk_profiles as rp', function($join) { 
+                    $join->on('rp.profile_id', 'ui.profile_id')
+                            ->where('rp.is_active', 'Yes');
+                });
+
+        if (!empty($search)) {
+            $like = env('DB_CONNECTION') == 'pgsql' ? 'ilike' : 'like';
+            $query->where(function($qry) use ($search, $like) {
+                $qry->where('ui.fullname', $like, '%'. $search .'%')
+                    ->orWhere('ui.sid', $like, '%'. $search .'%')
+                    ->orWhere('ui.cif', $like, '%'. $search .'%')
+                    ->orWhere('rp.profile_name', $like, '%'. $search .'%');
+                
+                if (strtotime($search)) {
+                    $searchDate = date('Y-m-d', strtotime(str_replace('/', '-', $search)));
+                    $qry->orWhereDate('ui.profile_expired_date', $searchDate);
+                }
+            });             
+        }
+
+        return $query->orderBy($colName, $colSort)
+            ->select(
+                'ui.investor_id', 
+                'ui.fullname', 
+                'ui.sid', 
+                'ui.photo_profile', 
+                'ui.cif', 
+                'rp.profile_name',                        
+                'ui.profile_expired_date'
+            )
+            ->paginate($limit, ['*'], 'page', $page);
     }
 
     public function totalInvestor()
@@ -695,5 +904,30 @@ class InvestorRepository implements InvestorRepositoryInterface
         {
             return (object) ['errors' => ['error_code' => 500, 'error_msg' => $e->getMessage()]];
         }
+    }
+
+    public function updateLastActivityByEmail(string $email, $token)
+    {
+        return Investor::where('email', $email)
+                ->update([
+                    'last_activity' => date('Y-m-d H:i:s'),
+                    'token' => $token
+                ]);
+    }
+
+    public function updateProfileById(int $id, array $data)
+    {
+        return Investor::where('investor_id', $id)
+                ->update($data);
+    }
+
+    public function updateOtpById(int $id, string $otp)
+    {
+        return Investor::where('investor_id', $id)
+                ->update([
+                    'otp' => $otp,
+                    'otp_created' => Carbon::now(),
+                    'token' => null,
+                ]);
     }
 }

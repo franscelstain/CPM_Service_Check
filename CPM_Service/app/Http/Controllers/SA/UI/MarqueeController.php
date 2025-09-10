@@ -29,7 +29,7 @@ class MarqueeController extends AppController
         }
         catch (\Exception $e)
         {
-            return $this->appi_catch($e);
+            return $this->api_catch($e);
         }
     }
 

@@ -31,7 +31,7 @@ class Email extends Mailable
     public function build()
     {
         $layout = !empty($this->mail->layout) ? $this->mail->layout : 'layouts';
-        $email =  $this->from('noreplay@bankbsi.co.id', 'CPM')->subject($this->mail->subject)->view('emails.'.$layout);
+        $email =  $this->from(env('MAIL_FROM'), 'CPM')->subject($this->mail->subject)->view('emails.'.$layout);
         if (!empty($this->mail->attach))
         {
             $email = $email->attach($this->mail->attach);

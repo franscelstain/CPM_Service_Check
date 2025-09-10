@@ -25,13 +25,11 @@ class InstallmentController extends AppController
 		    {
 		    	$product_code   = !empty($prd->ext_code) || !empty($prd->product_code) ? !empty($prd->ext_code) ? $prd->ext_code : $prd->product_code : '';
 		        $api = $this->api_ws(['sn' => 'TransactionInstallment', 'val' => [$product_code]])->original['message']->Result->InstallmentInquiries; 
-
 		        if (!empty($api))
                 {
                     foreach ($api as $a)
                     {
                         $save = $this->save($prd, $a);
-                        //return $this->app_response('xx',$a);
                         if (!$save->success)
                         {
                             $trans[] = ['product_code' => $prd->ext_code, 'message' => $save->message];
@@ -60,15 +58,14 @@ class InstallmentController extends AppController
         {
         	$data       = [];
         	$save       = [];
-			$investor   = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes'], ['cif', $a->CIF]])->first();
-			// $data_tmp = [];
+			// $investor   = Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes'], ['cif', $a->CIF]])->first();	
+            $investor   = Investor::where([['is_active', 'Yes'], ['cif', $a->CIF]])->first();
 			if (!empty($investor->investor_id) && !empty($prd->product_id))
         	{
         		$acc = Account::where([['account_no', $a->BankAccountNo], ['investor_id', $investor->investor_id], ['is_active', 'Yes']])->first();
         		$ins_id = $this->getInstallmentID($investor->investor_id, $prd->product_id, $a->RegisterID);
-                //$ins_id = $this->getInstallmentID('53', '39', '12', '25', '2020-02-07', '5', 'NEW746106529CRISP+');
-				//return $ins_id;
-                $act    = empty($ins_id->trans_installment_id) ? 'cre' : 'upd';
+                
+				$act    = empty($ins_id->trans_installment_id) ? 'cre' : 'upd';
 				$data   =[
 					'investor_id'			=> $investor->investor_id,
 					'product_id'    		=> !empty($prd->product_id) ? $prd->product_id : null,
@@ -109,7 +106,7 @@ class InstallmentController extends AppController
         }else{
             $instal_id->where('registered_id', $registered_id);
         }
-
+                
         return $instal_id->first();
     }
 }

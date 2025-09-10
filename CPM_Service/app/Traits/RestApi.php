@@ -69,7 +69,7 @@ trait RestApi
         return isset($result->code) ? $result : (object) array_merge(['code' => $code], (array) $result);
     }
     
-    protected function api_ws($arr=[], $lvl=0, $srv=[])
+    public function api_ws($arr=[], $lvl=0, $srv=[])
     {
         try
         {

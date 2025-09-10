@@ -26,7 +26,7 @@ class Config extends Model
         }
         else
         {
-            $rules = array_merge($rules, ['config_value' => 'required']);
+            $rules = array_merge($rules, ['config_value' => 'required|min:1']);
         }
 
         return $rules;

@@ -3,60 +3,100 @@
 namespace App\Http\Controllers\Sales\Balance;
 
 use App\Http\Controllers\AppController;
-use App\Interfaces\Balance\AssetOutstandingRepositoryInterface;
+use App\Services\Handlers\Finance\AssetOutstandingService;
 use Illuminate\Http\Request;
 
 class AssetOutstandingController extends AppController
 {
-    private $assetRepo;
+    protected $assetService;
     
-    public function __construct(AssetOutstandingRepositoryInterface $assetRepo)
+    public function __construct(AssetOutstandingService $assetService)
     {
-        $this->assetRepo = $assetRepo;
+        $this->assetService = $assetService;
     }
 
-    public function totalReturnAssets(Request $request, $id)
+    public function assetLatestDate(Request $request, $id)
     {
-        return $this->app_response('Assets Outstanding - Total Return Assets', $this->assetRepo->getTotalReturnAssets($request, $id));
+        try {
+            $latestDate = $this->assetService->assetLatestDate($request, $id);
+            return $this->app_response('Assets - Latest Date', $latestDate);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
     }
 
-    public function totalAssetsLiabilities(Request $request, $id)
+    public function getAssetCategory(Request $request, $id)
     {
-        return $this->app_response('Assets Outstanding - Total Asset Liabilities', $this->assetRepo->getTotalAssetsLiabilities($request, $id));
+        try {
+            $category = $this->assetService->getAssetCategory($request, $id);
+            return $this->app_response('Assets - Category', $category);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
     }
 
-    public function bank(Request $request, $id)
+    public function getAssetMutualClass(Request $request, $id)
     {
-        return $this->app_response('Assets Outstanding - Bank', $this->assetRepo->getAssetBank($request, $id));
-    }
-
-    public function bonds(Request $request, $id)
-    {
-        return $this->app_response('Assets Outstanding - Bonds', $this->assetRepo->getAssetBonds($request, $id));
-    }
-
-    public function category(Request $request, $id)
-    {
-        return $this->app_response('Assets Outstanding - Bank', $this->assetRepo->getAssetCategory($request, $id));
-    }
-
-    public function insurance(Request $request, $id)
-    {
-        return $this->app_response('Assets Outstanding - Insurance', $this->assetRepo->getAssetInsurance($request, $id));
+        try {
+            $category = $this->assetService->getAssetMutualClass($request, $id);
+            return $this->app_response('Assets - Mutual Fund By Class', $category);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
     }
 
     public function integration_data()
     {
-        return $this->app_response('Assets Outstanding - Integration', $this->assetRepo->getIntegration());
+        return $this->app_response('Assets Outstanding - Integration', $this->assetService->getIntegration());
     }
 
-    public function mutual_fund(Request $request, $id)
+    public function listAssetBank(Request $request, $id)
     {
-        return $this->app_response('Assets Outstanding - Mutual Fund', $this->assetRepo->getAssetMutual($request, $id));
+        try {
+            $bank = $this->assetService->listAssetBank($request, $id);
+            return $this->app_response('Bank', $bank);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
     }
 
-    public function mutual_fund_class(Request $request, $id)
+    public function listBondsAsset(Request $request, $id)
     {
-        return $this->app_response('Assets Outstanding - Mutual Fund', $this->assetRepo->getAssetMutualClass($request, $id));
+        try {
+            $bonds = $this->assetService->listBondsAsset($request, $id);
+            return $this->app_response('Assets - Bonds', $bonds);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
+    }
+
+    public function listInsuranceAsset(Request $request, $id)
+    {
+        try {
+            $insurance = $this->assetService->listInsuranceAsset($request, $id);
+            return $this->app_response('Assets - Insurance', $insurance);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
+    }
+
+    public function listMutualFundAsset(Request $request, $id)
+    {
+        try {
+            $mutual = $this->assetService->listMutualFundAsset($request, $id);
+            return $this->app_response('Mutual Fund', $mutual);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
+    }
+
+    public function totalReturnAsset(Request $request, $id)
+    {
+        try {
+            $returnAsset = $this->assetService->totalReturnAsset($request, $id);
+            return $this->app_response('Total Return Assets', $returnAsset);
+        } catch (\Exception $e) {
+            return $this->app_catch($e);
+        }
     }
 }

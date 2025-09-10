@@ -2,11 +2,11 @@
 
 namespace App\Repositories\Auth;
 
-use App\Http\Controllers\Administrative\Config\GeneralController;
 use App\Interfaces\Auth\UserAuthRepositoryInterface;
 use App\Models\Users\User;
 use App\Models\Users\UserPasswordAttemp;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 
 class UserAuthRepository implements UserAuthRepositoryInterface
@@ -100,31 +100,48 @@ class UserAuthRepository implements UserAuthRepositoryInterface
             // Perbarui atau buat entri percobaan login
             UserPasswordAttemp::updateOrCreate(
                 ['user_id' => $user->user_id],
-                ['attempt_count' => $attemptCount, 'created_host' => $_SERVER['SERVER_ADDR']]
+                ['attempt_count' => $attemptCount, 'created_host' => $_SERVER['SERVER_ADDR'],
+                 'created_by' => 'sys']
             );
 
             // Ambil konfigurasi dari GeneralController (misal: batas jumlah percobaan salah)
-            $generalCtrl = new GeneralController();
-            $configPassword = $generalCtrl->password()->original['data'];
+            $passAttempt = $this->passwordAttempt();
 
-            // Jika jumlah percobaan salah melebihi batas, blokir akun
-            if ($attemptCount >= $configPassword['PasswordInvalid']) {
-                User::where('email', $email)->update(['is_enable' => 'No']);
-                return [
-                    'error_code' => 422,
-                    'error_msg' => ['Sorry, your account password has been blocked due to multiple wrong attempts.']
-                ];
-            } else {
-                // Jika percobaan belum melebihi batas, beri tahu berapa percobaan yang tersisa
-                return [
-                    'error_code' => 422,
-                    'error_msg' => ['Password incorrect. Attempt ' . $attemptCount . ' of ' . $configPassword['PasswordInvalid']]
-                ];
+            if ($passAttempt) {
+                // Jika jumlah percobaan salah melebihi batas, blokir akun
+                if ($attemptCount >= $passAttempt) {
+                    User::where('email', $email)->update(['is_enable' => 'No']);
+                    return [
+                        'error_code' => 422,
+                        'error_msg' => ['Sorry, your account password has been blocked due to multiple wrong attempts.']
+                    ];
+                } else {
+                    // Jika percobaan belum melebihi batas, beri tahu berapa percobaan yang tersisa
+                    return [
+                        'error_code' => 422,
+                        'error_msg' => ['Password incorrect. Attempt ' . $attemptCount . ' of ' . $passAttempt]
+                    ];
+                }
             }
         }
 
         // Jika user tidak ditemukan, kembalikan pesan error standar
         return ['error_code' => 422, 'error_msg' => ['Email or Password is wrong']];
+    }
+
+    protected function passwordAttempt()
+    {
+        $attempt = DB::table('c_config')
+                ->where('config_name', 'PasswordInvalid')
+                ->where('config_type', 'Password')
+                ->where('is_active', 'Yes')
+                ->select('config_value')
+                ->first();
+        if ($attempt && isset($attempt->config_value)) {
+            return (int) $attempt->config_value;
+        } else {
+            return null;
+        }
     }
 
     /**

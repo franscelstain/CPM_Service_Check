@@ -32,19 +32,17 @@ class AumService
         $aumDate = date('Y-m-t', strtotime('last month'));
 
         // Get investors
-        $latestDataCurrent = $this->assetRepo->latestDataDate($aumDate);
-        $baseQueryCurrent = $this->assetRepo->baseQueryInvestorsByCategoryWithCurrentBalance($latestDataCurrent, $categoryIds);
+        $baseQueryCurrent = $this->assetRepo->baseQueryInvestorsByCategoryWithCurrentBalance($categoryIds);
         $currentData = $this->aumRepo->listAumPriority($baseQueryCurrent, $salesId, $aumDate, $targetAum, $search, $limit, $page, $colName, $colSort);
-        $total = !empty($search) ? $this->assetRepo->countInvestorsByCategoryWithCurrentBalance($latestDataCurrent, $aumDate, $categoryIds, $targetAum, $salesId) : $currentData->total();
+        $total = !empty($search) ? $this->assetRepo->countInvestorsByCategoryWithCurrentBalance($aumDate, $categoryIds, $targetAum, $salesId) : $currentData->total();
         if ($currentData->total() > 0) {
-            $latestDataDown = $this->assetRepo->latestDataDateDowngrade($aumDate);
-            $baseQueryDown = $this->assetRepo->baseQueryInvestorsByCategoryWithCurrentBalance($latestDataDown, $categoryIds);
-            $downgradeData = $this->aumRepo->getInvestorsByCategoryWithDowngradeBalance($baseQueryDown, $salesId, $aumDate);
+            $investorIds = $currentData->pluck('investor_id')->toArray();
+            $baseQueryDown = $this->assetRepo->baseQueryInvestorsByCategoryWithCurrentBalance($categoryIds);
+            $downgradeData = $this->aumRepo->getInvestorsByCategoryWithDowngradeBalance($baseQueryDown, $investorIds, $aumDate)->keyBy('investor_id');
             $currentData->map(function ($item) use ($downgradeData) {
-                $downData = $downgradeData->firstWhere('investor_id', $item->investor_id);
-                $item->current_aum = (float) $item->current_aum ?? 0;
+                $downData = $downgradeData->get($item->investor_id);
 
-                
+                $item->current_aum = (float) $item->current_aum ?? 0;                
                 $item->target_days = $item->current_date ? (strtotime(date('Y-m-d')) - strtotime($item->current_date)) / (60 * 60 * 24) : null;
                 
                 if ($item->is_priority && !$item->pre_approve) {
@@ -85,10 +83,9 @@ class AumService
         $aumDate = date('Y-m-t', strtotime('last month'));
 
         // Get investors
-        $latestData = $this->assetRepo->latestDataDate($aumDate);
-        $baseQueryCurrent = $this->assetRepo->baseQueryInvestorsByCategoryWithCurrentBalance($latestData, $categoryIds);
+        $baseQueryCurrent = $this->assetRepo->baseQueryInvestorsByCategoryWithCurrentBalance($categoryIds);
         $currentData = $this->aumRepo->listDropFund($baseQueryCurrent, $salesId, $aumDate, $targetAum, $search, $limit, $page, $colName, $colSort);
-        $total = !empty($search) ? $this->assetRepo->countInvestorsByCategoryWithCurrentBalance($latestData, $aumDate, $categoryIds, $targetAum, $salesId) : $currentData->total();
+        $total = !empty($search) ? $this->assetRepo->countInvestorsByCategoryWithCurrentBalance($aumDate, $categoryIds, $targetAum, $salesId) : $currentData->total();
         
         return [
             'item' => $currentData->items(),

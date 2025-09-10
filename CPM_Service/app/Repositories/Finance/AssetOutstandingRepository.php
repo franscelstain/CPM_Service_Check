@@ -23,168 +23,111 @@ class AssetOutstandingRepository implements AssetOutstandingRepositoryInterface
             ->max('outstanding_date');
     }
 
-    public function baseQueryInvestorsByCategoryWithCurrentBalance($latestData, $categoryIds)
+    public function baseQueryInvestorsByCategoryWithCurrentBalance($categoryIds)
     {
-        return DB::table('t_assets_outstanding AS tao')                
-                ->joinSub($latestData, 'latest_data', function ($join) {
-                    $join->on('tao.investor_id', '=', 'latest_data.investor_id')
-                        ->on('tao.product_id', '=', 'latest_data.product_id')
-                        ->on('tao.account_no', '=', 'latest_data.account_no')
-                        ->where(function ($query) {
-                            $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
-                                  ->orWhereNull('latest_data.latest_data_date');
-                        });
-                })
-                ->join('u_investors AS ui', 'tao.investor_id', '=', 'ui.investor_id')
-                ->join('m_products AS mp', 'tao.product_id', '=', 'mp.product_id')
-                ->join('m_asset_class AS mac', 'mp.asset_class_id', '=', 'mac.asset_class_id')
-                ->join('m_asset_categories AS mact', 'mac.asset_category_id', '=', 'mact.asset_category_id')
+        return DB::table('t_assets_outstanding as tao')
+                ->join('u_investors as ui', 'tao.investor_id', '=', 'ui.investor_id')
+                ->join('m_products as mp', 'mp.product_id', '=', 'tao.product_id')
+                ->join('m_asset_class as mac', 'mac.asset_class_id', '=', 'mp.asset_class_id')
+                ->join('m_asset_categories as mact', 'mact.asset_category_id', '=', 'mac.asset_category_id')
                 ->whereIn('mact.asset_category_id', $categoryIds)
                 ->where('tao.is_active', 'Yes')
                 ->where('ui.is_active', 'Yes')
                 ->where('mp.is_active', 'Yes')
                 ->where('mac.is_active', 'Yes')
-                ->where('mact.is_active', 'Yes');
+                ->where('mact.is_active', 'Yes')
+                ->orderBy('tao.investor_id')
+                ->orderBy('tao.account_no')
+                ->orderBy('tao.product_id')
+                ->orderByDesc('tao.data_date')
+                ->orderByDesc('tao.outstanding_id');
     }
 
-    public function countInvestorsByCategoryWithCurrentBalance($latestData, $outDate, $categoryIds, $targetAum, $salesId = null)
+    public function countInvestorsByCategoryWithCurrentBalance($outDate, $categoryIds, $targetAum, $salesId = null)
     {
-        $query = $this->baseQueryInvestorsByCategoryWithCurrentBalance($latestData, $categoryIds);
-        if ($salesId) {
-            $query->where('ui.sales_id', $salesId);
-        }
-        return $query->whereDate('tao.outstanding_date', $outDate)
-                ->selectRaw("
+        $subquery = $this->baseQueryInvestorsByCategoryWithCurrentBalance($categoryIds);
+        $subquery->selectRaw('DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
                     tao.investor_id,
-                    SUM(tao.balance_amount) AS downgrade_aum
-                ")
-                ->groupBy('tao.investor_id')
-                ->havingRaw('SUM(tao.balance_amount) <= ' . $targetAum)
+                    tao.balance_amount
+                ')
+                ->whereDate('tao.outstanding_date', $outDate);
+        if ($salesId) {
+            $subquery->where('ui.sales_id', $salesId);
+        }
+        return DB::table(DB::raw("({$subquery->toSql()}) as a"))
+                ->mergeBindings($subquery)
+                ->select('investor_id')
+                ->groupBy('investor_id')
+                ->havingRaw('SUM(balance_amount) <= ' . $targetAum)
                 ->count();
     }
 
     public function getAssetMutualClass($investorId, $latestDate)
     {    
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = DB::table('t_assets_outstanding as tao')
-            ->select(
-                'tao.product_id', 
-                'tao.account_no', 
-                DB::raw('MAX(tao.data_date) as max_data_date'),
-                DB::raw('MAX(tao.created_at) as max_created_at')
-            )
-            ->join('m_products as mp', 'mp.product_id', '=', 'tao.product_id')
-            ->where([
-                ['tao.investor_id', $investorId],
-                ['tao.is_active', 'Yes'],
-                ['mp.is_active', 'Yes'],
-                ['tao.outstanding_date', $latestDate],
-            ])
-            ->groupBy('tao.product_id', 'tao.account_no');
-
-        return  DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->on('tao.data_date', '=', 'latest_data.max_data_date')
-                    ->on('tao.created_at', '=', 'latest_data.max_created_at');
-            })
-            ->join('m_products as mp', 'mp.product_id', 'tao.product_id')
-            ->join('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
-            ->join('m_asset_categories as mact', 'mact.asset_category_id', 'mac.asset_category_id')
-            ->whereIn(DB::raw('LOWER(mact.asset_category_name)'), ['mutual fund'])
-            ->where([
-                ['tao.investor_id', $investorId], 
-                ['tao.is_active', 'Yes'], 
-                ['mp.is_active', 'Yes'], 
-                ['mac.is_active', 'Yes'], 
-                ['mact.is_active', 'Yes'], 
-                ['tao.outstanding_date', $latestDate],
-                ['tao.outstanding_unit', '>=', 1]
-            ])
-            ->whereExists(function ($qry) { 
-                $qry->select(DB::raw(1))
-                    ->from('u_investors as ui')
-                    ->whereColumn('ui.investor_id', 'tao.investor_id')
-                    ->where('ui.is_active', 'Yes');
-            })
-            ->select(
-                'mac.asset_class_name', 
-                'mac.asset_class_color', 
-                DB::raw('SUM(tao.balance_amount) as balance')
-            )
-            ->groupBy('mac.asset_class_name', 'mac.asset_class_color')
-            ->get();
+        return DB::select("
+            SELECT
+                asset_class_name,
+                asset_class_color,
+                SUM(balance_amount) AS balance
+            FROM (
+                SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                    tao.balance_amount,
+                    mac.asset_class_name,
+                    mac.asset_class_color
+                FROM t_assets_outstanding tao
+                JOIN u_investors ui ON tao.investor_id = ui.investor_id
+                JOIN m_products mp ON mp.product_id = tao.product_id
+                JOIN m_asset_class mac ON mac.asset_class_id = mp.asset_class_id
+                JOIN m_asset_categories mact ON mact.asset_category_id = mac.asset_category_id
+                WHERE tao.investor_id = ?
+                    AND tao.outstanding_date = ?
+                    AND LOWER(mact.asset_category_name) = 'mutual fund'
+                    AND tao.outstanding_unit >= 1
+                    AND tao.is_active = 'Yes'
+                    AND ui.is_active = 'Yes'
+                    AND mp.is_active = 'Yes'
+                    AND mac.is_active = 'Yes'
+                    AND mact.is_active = 'Yes'
+                ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+            ) AS assets
+            GROUP BY asset_class_name, asset_class_color
+        ", [$investorId, $latestDate]);
     }
 
-    public function getCategoryBalance($investorId, $category, $latestDate)
+    public function getCategoryBalance($investorId, $latestDate)
     {
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = DB::table('t_assets_outstanding as tao')
-            ->select(
-                'tao.product_id', 
-                'tao.account_no', 
-                DB::raw('MAX(tao.data_date) as max_data_date')
-            )
-            ->join('m_products as mp', 'mp.product_id', '=', 'tao.product_id')
-            ->where([
-                ['tao.investor_id', $investorId],
-                ['tao.is_active', 'Yes'],
-                ['mp.is_active', 'Yes'],
-                ['tao.outstanding_date', $latestDate],
-            ])
-            ->groupBy('tao.product_id', 'tao.account_no');
-
-        $query = DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->where(function($qry) {
-                        $qry->whereColumn('tao.data_date', '=', 'latest_data.max_data_date')
-                            ->orWhereNull('latest_data.max_data_date');
-                    });
-            })
-            ->join('m_products as mp', 'mp.product_id', 'tao.product_id')
-            ->join('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
-            ->join('m_asset_categories as mact', 'mact.asset_category_id', 'mac.asset_category_id')
-            ->where([
-                ['tao.investor_id', $investorId],
-                ['tao.is_active', 'Yes'],
-                ['mp.is_active', 'Yes'],
-                ['mac.is_active', 'Yes'],
-                ['mact.is_active', 'Yes'],
-                ['tao.outstanding_date', $latestDate],
-            ])
-            ->whereExists(function ($query) {
-                $query->select(DB::raw(1))
-                    ->from('u_investors as ui')
-                    ->whereColumn('ui.investor_id', 'tao.investor_id')
-                    ->where('ui.is_active', 'Yes');
-            });
-
-        switch ($category) {
-            case 'mutual_fund':
-                return $query->where(DB::raw('LOWER(mact.asset_category_name)'), 'mutual fund')->sum('balance_amount');
-
-            case 'bonds':
-                return $query->where(DB::raw('LOWER(mact.asset_category_name)'), 'bonds')->sum('balance_amount');
-
-            case 'saving':
-                return $query->where(DB::raw('LOWER(mact.asset_category_name)'), 'dpk')
-                    ->whereIn(DB::raw('LOWER(mac.asset_class_name)'), ['saving', 'tabungan'])
-                    ->sum('balance_amount');
-
-            case 'insurance':
-                return $query->whereIn(DB::raw('LOWER(mact.asset_category_name)'), ['insurance', 'bancassurance'])->sum('balance_amount');
-
-            case 'deposit':
-                return $query->where(DB::raw('LOWER(mact.asset_category_name)'), 'dpk')
-                    ->whereIn(DB::raw('LOWER(mac.asset_class_name)'), ['deposit', 'deposito'])
-                    ->sum('balance_amount');
-
-            default:
-                return 0;
-        }
+        return DB::select("
+            SELECT
+                CASE
+                    WHEN LOWER(asset_category_name) = 'mutual fund' THEN 'mutual_fund'
+                    WHEN LOWER(asset_category_name) = 'bonds' THEN 'bonds'
+                    WHEN LOWER(asset_category_name) IN ('insurance', 'bancassurance') THEN 'insurance'
+                    WHEN LOWER(asset_category_name) = 'dpk' AND LOWER(asset_class_name) IN ('saving', 'tabungan') THEN 'saving'
+                    WHEN LOWER(asset_category_name) = 'dpk' AND LOWER(asset_class_name) IN ('deposit', 'deposito') THEN 'deposit'
+                    ELSE 'other'
+                END AS category_key,
+                SUM(balance_amount) AS total_balance
+            FROM (
+                SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                    tao.balance_amount,
+                    mac.asset_class_name,
+                    mact.asset_category_name
+                FROM t_assets_outstanding tao
+                JOIN u_investors ui ON tao.investor_id = ui.investor_id
+                JOIN m_products mp ON mp.product_id = tao.product_id
+                JOIN m_asset_class mac ON mac.asset_class_id = mp.asset_class_id
+                JOIN m_asset_categories mact ON mact.asset_category_id = mac.asset_category_id
+                WHERE tao.investor_id = ?
+                    AND tao.outstanding_date = ?
+                    AND tao.is_active = 'Yes'
+                    AND ui.is_active = 'Yes'
+                    AND mp.is_active = 'Yes'
+                    AND mac.is_active = 'Yes'
+                    AND mact.is_active = 'Yes'
+                ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+            ) AS latest_assets
+            GROUP BY category_key
+        ", [$investorId, $latestDate]);
     }
 
     public function getIntegration()
@@ -368,318 +311,231 @@ class AssetOutstandingRepository implements AssetOutstandingRepositoryInterface
 
     public function listAssetBank($investorId, $latestDate)
     {
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = $this->latestDataDate($latestDate);
-
-        return DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->on('tao.investor_id', '=', 'latest_data.investor_id')
-                    ->where(function ($query) {
-                        $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
-                              ->orWhereNull('latest_data.latest_data_date');
-                    });
-            })
-            ->join('m_products as mp', 'mp.product_id', 'tao.product_id')
-            ->join('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
-            ->join('m_asset_categories as mact', 'mact.asset_category_id', 'mac.asset_category_id')
-            ->leftJoin('t_stg_exchange_rates as tse', function($join) {
-                $join->on('tao.currency', '=', 'tse.currency')
-                     ->on('tao.data_date', '=', 'tse.date')
-                     ->where('tse.currency', '!=', 'IDR');
-            })
-            ->whereIn(DB::raw('LOWER(mact.asset_category_name)'), ['dpk'])
-            ->where([
-                ['tao.investor_id', $investorId],
-                ['tao.is_active', 'Yes'],
-                ['mp.is_active', 'Yes'],
-                ['mac.is_active', 'Yes'],
-                ['mact.is_active', 'Yes'],
-                ['tao.balance_amount', '>=', 1],
-                ['tao.outstanding_date', $latestDate],
-            ])
-            ->whereExists(function ($query) {
-                $query->select(DB::raw(1))
-                    ->from('u_investors as ui')
-                    ->whereColumn('ui.investor_id', 'tao.investor_id')
-                    ->where('ui.is_active', 'Yes');
-            })
-            ->select(
-                'mp.product_name',
-                'tao.account_no',
-                'tao.currency',
-                'tao.balance_amount',
-                'tao.kurs',
-                'tao.data_date',
-                'tao.balance_amount_original',
-                'tao.realized_gl_original',
-                'tao.realized_gl',
-                'tse.rate',
-                DB::raw('MAX(tao.data_date) OVER () as latest_data_date')
-            )
-            ->distinct()
-            ->get();
+        return DB::select("
+            SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                mp.product_name,
+                tao.account_no,
+                tao.currency,
+                tao.balance_amount,
+                tao.kurs,
+                tao.data_date,
+                tao.balance_amount_original,
+                tao.realized_gl_original,
+                tao.realized_gl,
+                CASE WHEN tao.currency != 'IDR' THEN tse.rate ELSE 1 END AS rate
+            FROM t_assets_outstanding tao
+            JOIN u_investors ui ON tao.investor_id = ui.investor_id
+            JOIN m_products mp ON mp.product_id = tao.product_id
+            JOIN m_asset_class mac ON mac.asset_class_id = mp.asset_class_id
+            JOIN m_asset_categories mact ON mact.asset_category_id = mac.asset_category_id
+            LEFT JOIN t_stg_exchange_rates as tse ON tao.currency = tse.currency AND tao.outstanding_date = tse.date
+            WHERE tao.investor_id = ?
+                AND tao.outstanding_date = ?
+                AND LOWER(mact.asset_category_name) = 'dpk'
+                AND tao.balance_amount >= 1
+                AND tao.is_active = 'Yes'
+                AND ui.is_active = 'Yes'
+                AND mp.is_active = 'Yes'
+                AND mac.is_active = 'Yes'
+                AND mact.is_active = 'Yes'
+            ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+        ", [$investorId, $latestDate]);        
     }
 
     public function listBondsAsset($investorId, $latestDate)
     {
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = $this->latestDataDate($latestDate);
-            
-        return DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->on('tao.investor_id', '=', 'latest_data.investor_id')
-                    ->where(function ($query) {
-                        $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
-                              ->orWhereNull('latest_data.latest_data_date');
-                    });
-            })
-            ->join('m_products as mp', 'mp.product_id', 'tao.product_id')
-            ->join('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
-            ->join('m_asset_categories as mact', 'mact.asset_category_id', 'mac.asset_category_id')
-            ->leftJoin('t_stg_exchange_rates as tse', function($join) {
-                $join->on('tao.currency', '=', 'tse.currency')
-                     ->on('tao.data_date', '=', 'tse.date')
-                     ->where('tao.currency', '!=', 'IDR');
-            })
-            ->whereIn(DB::raw('LOWER(mact.asset_category_name)'), ['bonds'])
-            ->where([
-                ['tao.investor_id', $investorId],
-                ['tao.is_active', 'Yes'],
-                ['mp.is_active', 'Yes'],
-                ['mac.is_active', 'Yes'],
-                ['mact.is_active', 'Yes'],
-                ['tao.balance_amount', '>=', 1],
-                ['tao.outstanding_date', $latestDate],
-            ])
-            ->whereExists(function ($query) {
-                $query->select(DB::raw(1))
-                    ->from('u_investors as ui')
-                    ->whereColumn('ui.investor_id', 'tao.investor_id')
-                    ->where('ui.is_active', 'Yes');
-            })
-            ->select(
-                'mp.product_id',
-                'mp.product_name',
-                'tao.account_no',
-                'tao.currency',
-                'tao.balance_amount',
-                'tao.kurs',
-                'tao.data_date',
-                'tao.balance_amount_original',
-                'tao.return_percentage',
-                'tao.unrealized_gl_original',
-                'tao.return_amount',
-                'tao.placement_amount_original',
-                'tse.rate',
-                DB::raw('MAX(tao.data_date) OVER () as latest_data_date')
-            )
-            ->distinct()
-            ->get();
+        return DB::select("
+            SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                tao.product_id,
+                mp.product_name,
+                tao.account_no,
+                tao.currency,
+                tao.balance_amount,
+                tao.kurs,
+                tao.data_date,
+                tao.balance_amount_original,
+                tao.unrealized_gl_original,
+                tao.unrealized_gl,
+                tao.unrealized_gl_pct,
+                tao.return_amount,
+                tao.placement_amount_original,
+                CASE WHEN tao.currency != 'IDR' THEN tse.rate ELSE 1 END AS rate
+            FROM t_assets_outstanding tao
+            JOIN u_investors ui ON tao.investor_id = ui.investor_id
+            JOIN m_products mp ON mp.product_id = tao.product_id
+            JOIN m_asset_class mac ON mac.asset_class_id = mp.asset_class_id
+            JOIN m_asset_categories mact ON mact.asset_category_id = mac.asset_category_id
+            LEFT JOIN t_stg_exchange_rates as tse ON tao.currency = tse.currency AND tao.outstanding_date = tse.date
+            WHERE tao.investor_id = ?
+                AND tao.outstanding_date = ?
+                AND LOWER(mact.asset_category_name) = 'bonds'
+                AND tao.balance_amount >= 1
+                AND tao.is_active = 'Yes'
+                AND ui.is_active = 'Yes'
+                AND mp.is_active = 'Yes'
+                AND mac.is_active = 'Yes'
+                AND mact.is_active = 'Yes'
+            ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+        ", [$investorId, $latestDate]);
     }
 
     public function listInsuranceAsset($investorId, $latestDate)
     {
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = $this->latestDataDate($latestDate);
-
-        // Query utama untuk mengambil data berdasarkan subquery
-        return DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->on('tao.investor_id', '=', 'latest_data.investor_id')
-                    ->where(function ($query) {
-                        $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
-                              ->orWhereNull('latest_data.latest_data_date');
-                    });
-            })
-            ->join('m_products as mp', 'mp.product_id', '=', 'tao.product_id')
-            ->join('m_asset_class as mac', 'mac.asset_class_id', '=', 'mp.asset_class_id')
-            ->join('m_asset_categories as mact', 'mact.asset_category_id', '=', 'mac.asset_category_id')
-            ->leftJoin('m_issuer as mi', function ($join) {
-                $join->on('mi.issuer_id', '=', 'mp.issuer_id')
-                    ->where('mi.is_active', 'Yes');
-            })
-            ->leftJoin('t_stg_exchange_rates as tse', function($join) {
-                $join->on('tao.currency', '=', 'tse.currency')
-                     ->on('tao.data_date', '=', 'tse.date')
-                     ->where('tao.currency', '!=', 'IDR');
-            })
-            ->whereIn(DB::raw('LOWER(mact.asset_category_name)'), ['insurance', 'bancassurance'])
-            ->where([
-                ['tao.investor_id', $investorId],
-                ['tao.is_active', 'Yes'],
-                ['mp.is_active', 'Yes'],
-                ['mac.is_active', 'Yes'],
-                ['mact.is_active', 'Yes'],
-                ['tao.outstanding_date', $latestDate],
-            ])
-            ->select(
-                'mp.product_name',
-                'tao.account_no',
-                'tao.currency',
-                'tao.balance_amount',
-                'tao.kurs',
-                'tao.data_date',
-                'tao.balance_amount_original',
-                'tao.placement_amount',
-                'tao.premium_amount',
-                'mi.issuer_name',
-                'tse.rate',
-                DB::raw('MAX(tao.data_date) OVER () as latest_data_date')
-            )
-            ->distinct()
-            ->get();
+        return DB::select("
+            SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                mp.product_name,
+                tao.account_no,
+                tao.currency,
+                tao.balance_amount,
+                tao.kurs,
+                tao.data_date,
+                tao.balance_amount_original,
+                tao.placement_amount,
+                tao.premium_amount,
+                mi.issuer_name,
+                CASE WHEN tao.currency != 'IDR' THEN tse.rate ELSE 1 END AS rate
+            FROM t_assets_outstanding tao
+            JOIN u_investors ui ON tao.investor_id = ui.investor_id
+            JOIN m_products mp ON mp.product_id = tao.product_id
+            JOIN m_asset_class mac ON mac.asset_class_id = mp.asset_class_id
+            JOIN m_asset_categories mact ON mact.asset_category_id = mac.asset_category_id
+            LEFT JOIN m_issuer as mi ON mi.issuer_id = mp.issuer_id AND mi.is_active = 'Yes'
+            LEFT JOIN t_stg_exchange_rates as tse ON tao.currency = tse.currency AND tao.outstanding_date = tse.date
+            WHERE tao.investor_id = ?
+                AND tao.outstanding_date = ?
+                AND LOWER(mact.asset_category_name) IN ('insurance', 'bancassurance')
+                AND tao.is_active = 'Yes'
+                AND ui.is_active = 'Yes'
+                AND mp.is_active = 'Yes'
+                AND mac.is_active = 'Yes'
+                AND mact.is_active = 'Yes'
+            ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+        ", [$investorId, $latestDate]);
     }
 
     public function listMutualFundAsset($investorId, $latestDate)
     {
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = $this->latestDataDate($latestDate);
-
-        return DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->on('tao.investor_id', '=', 'latest_data.investor_id')
-                    ->where(function ($query) {
-                        $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
-                              ->orWhereNull('latest_data.latest_data_date');
-                    });
-            })
-            ->join('m_products as mp', 'mp.product_id', 'tao.product_id')
-            ->join('m_asset_class as mac', 'mac.asset_class_id', 'mp.asset_class_id')
-            ->join('m_asset_categories as mact', 'mact.asset_category_id', 'mac.asset_category_id')
-            ->leftJoin('t_stg_exchange_rates as tse', function($join) {
-                $join->on('tao.currency', '=', 'tse.currency')
-                     ->on('tao.data_date', '=', 'tse.date')
-                     ->where('tao.currency', '!=', 'IDR');
-            })
-            ->whereIn(DB::raw('LOWER(mact.asset_category_name)'), ['mutual fund'])
-            ->where([
-                ['tao.investor_id', $investorId],
-                ['tao.is_active', 'Yes'],
-                ['mp.is_active', 'Yes'],
-                ['mac.is_active', 'Yes'],
-                ['mact.is_active', 'Yes'],
-                ['tao.outstanding_unit', '>=', 1],
-                ['tao.outstanding_date', $latestDate],
-            ])
-            ->whereExists(function ($query) {
-                $query->select(DB::raw(1))
-                    ->from('u_investors as ui')
-                    ->whereColumn('ui.investor_id', 'tao.investor_id')
-                    ->where('ui.is_active', 'Yes');
-            })
-            ->select(
-                'mp.product_id',
-                'mp.product_name',
-                'tao.account_no',
-                'tao.currency',
-                'tao.balance_amount',
-                'tao.kurs',
-                'tao.data_date',
-                'tao.balance_amount_original',
-                'tao.return_percentage',
-                'tao.unrealized_gl_original',
-                'tao.return_amount',
-                'tao.outstanding_unit',
-                'mac.asset_class_name',
-                'tse.rate',
-                DB::raw('MAX(tao.data_date) OVER () as latest_data_date')
-            )            
-            ->distinct()
-            ->get();
+        return DB::select("
+            SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                tao.product_id,
+                mp.product_name,
+                tao.account_no,
+                tao.currency,
+                tao.balance_amount,
+                tao.kurs,
+                tao.data_date,
+                tao.balance_amount_original,
+                tao.return_percentage,
+                tao.unrealized_gl_original,
+                tao.return_amount,
+                tao.outstanding_unit,
+                mac.asset_class_name,
+                tao.kurs AS rate
+            FROM t_assets_outstanding tao
+            JOIN u_investors ui ON tao.investor_id = ui.investor_id
+            JOIN m_products mp ON mp.product_id = tao.product_id
+            JOIN m_asset_class mac ON mac.asset_class_id = mp.asset_class_id
+            JOIN m_asset_categories mact ON mact.asset_category_id = mac.asset_category_id
+            LEFT JOIN t_stg_exchange_rates as tse ON tao.currency = tse.currency AND tao.outstanding_date = tse.date
+            WHERE tao.investor_id = ?
+                AND tao.outstanding_date = ?
+                AND LOWER(mact.asset_category_name) = 'mutual fund'
+                AND tao.outstanding_unit >= 1
+                AND tao.is_active = 'Yes'
+                AND ui.is_active = 'Yes'
+                AND mp.is_active = 'Yes'
+                AND mac.is_active = 'Yes'
+                AND mact.is_active = 'Yes'
+            ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+        ", [$investorId, $latestDate]);
     }
     
     public function totalAsset($investorId, $outDate)
     {
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = $this->latestDataDate($outDate);
+        $query = DB::selectOne("
+            SELECT SUM(balance_amount) AS total_balance_amount
+            FROM (
+                SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                    tao.balance_amount
+                FROM t_assets_outstanding tao
+                JOIN u_investors ui ON tao.investor_id = ui.investor_id
+                JOIN m_products mp ON tao.product_id = mp.product_id
+                JOIN m_asset_class mac ON mp.asset_class_id = mac.asset_class_id
+                JOIN m_asset_categories mact ON mac.asset_category_id = mact.asset_category_id
+                WHERE tao.investor_id = ?
+                    AND tao.outstanding_date = ?
+                    AND tao.balance_amount >= 1
+                    AND tao.is_active = 'Yes'
+                    AND ui.is_active = 'Yes'
+                    AND mp.is_active = 'Yes'
+                    AND mac.is_active = 'Yes'
+                    AND mact.is_active = 'Yes'
+                ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+            ) AS filtered
+        ", [$investorId, $outDate]);
 
-        return DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->on('tao.investor_id', '=', 'latest_data.investor_id')
-                    ->where(function ($query) {
-                        $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
-                              ->orWhereNull('latest_data.latest_data_date');
-                    });
-            })
-            ->join('m_products as mp', 'mp.product_id', '=', 'tao.product_id')
-            ->where('tao.investor_id', $investorId)
-            ->where('tao.outstanding_date', $outDate)
-            ->where('tao.is_active', 'Yes')
-            ->where('mp.is_active', 'Yes')
-            ->where('tao.balance_amount', '>=', 1)
-            ->sum('tao.balance_amount');
+        return $query->total_balance_amount ?? 0;
     }
 
     public function totalRealizedGL($investorId, $outstandingDate, $assetClass, $assetCategory)
     {
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = $this->latestDataDate($outstandingDate);
+        $query = DB::selectOne("
+            SELECT SUM(realized_gl) AS total_realized_gl
+            FROM (
+                SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                    tao.realized_gl
+                FROM t_assets_outstanding tao
+                JOIN u_investors ui ON tao.investor_id = ui.investor_id
+                JOIN m_products mp ON tao.product_id = mp.product_id
+                JOIN m_asset_class mac ON mp.asset_class_id = mac.asset_class_id
+                JOIN m_asset_categories mact ON mac.asset_category_id = mact.asset_category_id
+                WHERE tao.investor_id = ?
+                    AND tao.outstanding_date = ?
+                    AND tao.is_active = 'Yes'
+                    AND ui.is_active = 'Yes'
+                    AND mp.is_active = 'Yes'
+                    AND mac.is_active = 'Yes'
+                    AND mact.is_active = 'Yes'
+                    AND LOWER(mact.asset_category_name) = ?
+                    " . (
+                        in_array(strtolower($assetClass), ['saving', 'tabungan']) 
+                        ? "AND LOWER(mac.asset_class_name) IN ('saving', 'tabungan')" 
+                        : "AND LOWER(mac.asset_class_name) = ?"
+                    ) . "
+                ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+            ) AS filtered
+        ", in_array(strtolower($assetClass), ['saving', 'tabungan'])
+            ? [$investorId, $outstandingDate, strtolower($assetCategory)]
+            : [$investorId, $outstandingDate, strtolower($assetCategory), strtolower($assetClass)]
+        );
 
-        $query = DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->on('tao.investor_id', '=', 'latest_data.investor_id')
-                    ->where(function ($query) {
-                        $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
-                              ->orWhereNull('latest_data.latest_data_date');
-                    });
-            })
-            ->join('m_products as mp', 'mp.product_id', '=', 'tao.product_id')
-            ->join('m_asset_class as mac', 'mac.asset_class_id', '=', 'mp.asset_class_id')
-            ->join('m_asset_categories as mac2', 'mac2.asset_category_id', '=', 'mac.asset_category_id')
-            ->where('tao.outstanding_date', $outstandingDate)
-            ->where('tao.investor_id', $investorId)
-            ->where('tao.is_active', 'Yes')
-            ->where('mp.is_active', 'Yes')
-            ->where('mac.is_active', 'Yes')
-            ->where('mac2.is_active', 'Yes')
-            ->where(DB::raw('LOWER(mac2.asset_category_name)'), strtolower($assetCategory));
-
-        if (strtolower($assetClass) == 'saving' || strtolower($assetClass) == 'tabungan') {
-            $query->whereIn(DB::raw('LOWER(mac.asset_class_name)'), ['saving', 'tabungan']);
-        } else {
-            $query->where(DB::raw('LOWER(mac.asset_class_name)'), strtolower($assetClass));
-        }
-        
-        return $query->sum('tao.realized_gl');
+        return $query->total_realized_gl ?? 0;
     }
 
     public function totalUnrealizedReturn($investorId, $outstandingDate, $assetCategory)
     {
-        // Subquery untuk mendapatkan data_date terbaru per product_name dan account_no
-        $subQuery = $this->latestDataDate($outstandingDate);
+        $query = DB::selectOne("
+            SELECT SUM(return_amount) AS total_return_amount
+            FROM (
+                SELECT DISTINCT ON (tao.investor_id, tao.account_no, tao.product_id)
+                    tao.return_amount
+                FROM t_assets_outstanding tao
+                JOIN u_investors ui ON tao.investor_id = ui.investor_id
+                JOIN m_products mp ON tao.product_id = mp.product_id
+                JOIN m_asset_class mac ON mp.asset_class_id = mac.asset_class_id
+                JOIN m_asset_categories mact ON mac.asset_category_id = mact.asset_category_id
+                WHERE tao.investor_id = ?
+                    AND tao.outstanding_date = ?
+                    AND tao.is_active = 'Yes'
+                    AND ui.is_active = 'Yes'
+                    AND mp.is_active = 'Yes'
+                    AND mac.is_active = 'Yes'
+                    AND mact.is_active = 'Yes'
+                    AND LOWER(mact.asset_category_name) = ?
+                ORDER BY tao.investor_id, tao.account_no, tao.product_id, (tao.data_date IS NULL), tao.data_date DESC, tao.outstanding_id DESC
+            ) AS filtered
+        ", [$investorId, $outstandingDate, strtolower($assetCategory)]);
 
-        return DB::table('t_assets_outstanding as tao')
-            ->joinSub($subQuery, 'latest_data', function ($join) {
-                $join->on('tao.product_id', '=', 'latest_data.product_id')
-                    ->on('tao.account_no', '=', 'latest_data.account_no')
-                    ->on('tao.investor_id', '=', 'latest_data.investor_id')
-                    ->where(function ($query) {
-                        $query->whereColumn('tao.data_date', '=', 'latest_data.latest_data_date')
-                              ->orWhereNull('latest_data.latest_data_date');
-                    });
-            })
-            ->join('m_products as mp', 'mp.product_id', '=', 'tao.product_id')
-            ->join('m_asset_class as mac', 'mac.asset_class_id', '=', 'mp.asset_class_id')
-            ->join('m_asset_categories as mac2', 'mac2.asset_category_id', '=', 'mac.asset_category_id')
-            ->where('tao.outstanding_date', $outstandingDate)
-            ->where('tao.investor_id', $investorId)
-            ->where('tao.is_active', 'Yes')
-            ->where('mp.is_active', 'Yes')
-            ->where('mac.is_active', 'Yes')
-            ->where('mac2.is_active', 'Yes')
-            ->where(DB::raw('LOWER(mac2.asset_category_name)'), strtolower($assetCategory))
-            ->sum('tao.return_amount');
+        return $query->total_return_amount ?? 0;
     }
 }

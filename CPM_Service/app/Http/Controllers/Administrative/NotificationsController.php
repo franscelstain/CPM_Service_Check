@@ -64,6 +64,28 @@ class NotificationsController extends AppController
     public function save(Request $request, $id = null)
     {
         try {
+            // Konversi nilai continuous.* menjadi boolean
+            if ($request->has('reminder') && is_array($request->reminder)) {
+                $reminder = $request->reminder;
+    
+                // Sinkronisasi `continuous` berdasarkan jumlah elemen di `reminder`
+                $continuous = $request->has('continuous') ? $request->continuous : [];
+                $continuous = array_map(function ($index) use ($continuous) {
+                    $value = $continuous[$index] ?? 'false'; // Default ke false jika tidak ada input
+                    $lowerValue = strtolower($value);
+                    if (in_array($lowerValue, ['true', 't', '1'], true)) {
+                        return true;
+                    } elseif (in_array($lowerValue, ['false', 'f', '0'], true)) {
+                        return false;
+                    }
+                    return false; // Default nilai jika input tidak valid
+                }, array_keys($reminder));
+    
+                $request->merge([
+                    'continuous' => $continuous, // Perbarui continuous di $request
+                ]);
+            }
+
             $validationErrors = $this->validateRequest($request, Notification::rules());
             // Jika ada error validasi, return response error
             if ($validationErrors) {
@@ -96,8 +118,8 @@ class NotificationsController extends AppController
                 'title' => $request->title,
                 'text_message' => $request->text_message,
                 'notif_code' => $request->notif_code,
-                'email_content_id' => $request->email_content_id,
-                'redirect' => $request->redirect,
+                'email_content_id' => !empty($request->email_content_id) ? $request->email_content_id : null,
+                'redirect' => !empty($request->redirect) ? $request->redirect : null,
                 'assign_to' => !empty($request->assign_to) ? json_encode($request->assign_to) : null,
                 'notif_web' => !empty($request->notif_web) ? $request->notif_web : 'f',
                 'notif_mail' => !empty($request->notif_mail) ? $request->notif_mail : 'f',

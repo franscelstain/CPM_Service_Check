@@ -23,6 +23,10 @@ class AppController extends Controller
     
     protected function app_catch($e, $res=true)
     {
+        Log::error('Error terjadi: ' . $e->getMessage(), [
+            'exception' => $e,
+            'stack_trace' => $e->getTraceAsString(),
+        ]);
         return $res ? $this->app_response('Response Failed', [], ['error_code' => 500, 'error_msg' => [$e->getMessage()]]) : $e->getMessage();
     }
 

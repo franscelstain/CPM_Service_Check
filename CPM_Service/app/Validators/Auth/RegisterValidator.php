@@ -3,6 +3,7 @@
 namespace App\Validators\Auth;
 
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 
 class RegisterValidator
 {
@@ -13,7 +14,10 @@ class RegisterValidator
             'email' => [
                 'required',
                 'email',
-                \Illuminate\Validation\Rule::unique('u_investors')->ignore(null, 'investor_id')->where('is_active', 'Yes'),
+                Rule::unique('u_investors')
+                    ->ignore(null, 'investor_id')
+                    ->where('is_active', 'Yes')
+                    ->where('valid_account', 'Yes')
             ],
             'password' => [
                 'required',

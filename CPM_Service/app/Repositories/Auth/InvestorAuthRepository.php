@@ -22,8 +22,8 @@ class InvestorAuthRepository implements InvestorAuthRepositoryInterface
     {
         return Investor::where([['is_active', 'Yes'], ['valid_account', 'Yes']])
             ->where(function ($qry) use ($identity_no, $email) {
-                return $qry->where([['identity_no', $identity_no], ['valid_account', 'Yes']])
-                    ->orWhere('email', $email);
+                return $qry->where('identity_no', $identity_no)
+                            ->orWhere('email', $email);
             })->count();
     }
 
