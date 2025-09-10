@@ -115,7 +115,7 @@ $app->register(Illuminate\Notifications\NotificationServiceProvider::class);
 $app->register(Maatwebsite\Excel\ExcelServiceProvider::class);
 $app->register(App\Providers\RepositoryServiceProvider::class);
 $app->register(Laravel\Lumen\Console\ConsoleServiceProvider::class);
-//$app->register(LdapRecord\Laravel\LdapServiceProvider::class);
+$app->register(LdapRecord\Laravel\LdapServiceProvider::class);
 
 $app->configure('filesystems');
 //$app->alias('Storage', Illuminate\Support\Facades\Storage::class);
